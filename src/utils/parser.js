@@ -2,16 +2,16 @@ export const parseAccountNumber = (accountString) => {
   if (!accountString) return { coa: '', outlet: '', pt: '' };
   
   // Example: "616100-SHI-SHMTA-000"
-  const parts = accountString.split('-');
-  const rawCoa = parts[0] || '';
+  const parts = accountString.toString().trim().split('-');
+  const rawCoa = (parts[0] || '').trim();
   let coa = rawCoa;
   if (coa.startsWith('6')) {
     coa = coa.substring(0, 5);
   } else if (coa.startsWith('2')) {
     coa = coa.substring(0, 6);
   }
-  const pt = parts[1] || '';
-  const outlet = parts[2] || '';
+  const pt = (parts[1] || '').trim();
+  const outlet = (parts[2] || '').trim();
 
   return { coa, pt, outlet };
 };
@@ -36,9 +36,11 @@ export const determineCategory = (coa, reference) => {
   return null; // Not a utility COA
 };
 
-export const processRawData = (data, uploadMonth, groupCode, isBulk = false) => {
-  return data
-    .map((rawRow) => {
+export const processRawData = (data, uploadMonth, groupCode, isBulk = false, debugCallback = null) => {
+  let debugLogs = [];
+  
+  const result = data
+    .map((rawRow, index) => {
       // Normalize keys to lowercase and trim spaces
       const row = {};
       Object.keys(rawRow).forEach(key => {
@@ -48,27 +50,62 @@ export const processRawData = (data, uploadMonth, groupCode, isBulk = false) => 
         }
       });
 
-      const accountStr = row['account number'] || '';
+      const journalEntry = (row['journal entry'] || row['journal_entry'] || row['journal'] || '').toString().trim();
+      const isTarget = journalEntry === '291547';
+      
+      if (isTarget) {
+        debugLogs.push(`--- MEMBACA BARIS Excel ke-${index + 2} ---`);
+        debugLogs.push(`Data Mentah: ${JSON.stringify(rawRow)}`);
+      }
+
+      const accountStr = row['account number'] || row['account_number'] || row['account'] || '';
       const { coa, outlet } = parseAccountNumber(accountStr);
       const category = determineCategory(coa, row['reference']);
       
-      if (!category) return null; // Ignore if not utility
+      if (isTarget) {
+        debugLogs.push(`Hasil Parsing Akun: string='${accountStr}', COA='${coa}', Outlet='${outlet}', Kategori='${category}'`);
+      }
       
-      const trxDate = row['trx date'];
-      const journalEntry = row['journal entry'];
+      if (!category) {
+        if (isTarget) debugLogs.push(`❌ DITOLAK: Kategori tidak ditemukan (bukan utilitas).`);
+        return null; // Ignore if not utility
+      }
+      
+      let trxDate = row['trx date'] || row['trx_date'] || row['date'];
+      
+      // Fix Excel timezone/rounding backwards shift (e.g., 23:59:48 becoming the previous day)
+      // by adding 12 hours (half a day) to ensure we hit the correct local date.
+      if (trxDate) {
+        try {
+          const tempD = new Date(trxDate);
+          if (!isNaN(tempD.getTime())) {
+            tempD.setHours(tempD.getHours() + 12);
+            trxDate = `${tempD.getFullYear()}-${String(tempD.getMonth() + 1).padStart(2, '0')}-${String(tempD.getDate()).padStart(2, '0')}`;
+          }
+        } catch (e) {
+          // Fallback to original string if parse fails
+        }
+      }
+      
+      if (isTarget) {
+        debugLogs.push(`Hasil Parsing Tanggal: trxDate='${trxDate}', journalEntry='${journalEntry}'`);
+      }
       
       // Prevent Supabase not-null constraints
-      if (!trxDate || !journalEntry) return null;
+      if (!trxDate || !journalEntry) {
+        if (isTarget) debugLogs.push(`❌ DITOLAK: Tanggal transaksi atau Journal Entry kosong.`);
+        return null;
+      }
 
       const cabang = row['cabang'] || '';
-      const isCabangDiffers = outlet.toUpperCase() !== cabang.toUpperCase();
+      const isCabangDiffers = outlet.toUpperCase() !== cabang.toString().trim().toUpperCase();
       
       // Handle date formatting
       let derivedMonth = uploadMonth;
       
       if (isBulk) {
-        // Parse date to extract YYYY-MM-01
         try {
+          // Extract YYYY-MM-01 from the normalized trxDate
           const d = new Date(trxDate);
           if (!isNaN(d.getTime())) {
             derivedMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
@@ -83,12 +120,12 @@ export const processRawData = (data, uploadMonth, groupCode, isBulk = false) => 
         series: row['series'] || '',
         trx_date: trxDate,
         account_number: accountStr,
-        account_description: row['account description'] || '',
-        debit_amount: parseFloat(row['debit amount']) || 0,
-        credit_amount: parseFloat(row['credit amount']) || 0,
-        reference: row['reference'] || '',
-        originating_document_number: row['originating document number'] || '',
-        cabang: cabang,
+        account_description: (row['account description'] || row['account_description'] || '').toString(),
+        debit_amount: parseFloat(row['debit amount'] || row['debit_amount'] || row['debit']) || 0,
+        credit_amount: parseFloat(row['credit amount'] || row['credit_amount'] || row['credit']) || 0,
+        reference: (row['reference'] || '').toString(),
+        originating_document_number: (row['originating document number'] || row['originating_document_number'] || '').toString(),
+        cabang: cabang.toString().trim(),
         upload_month: derivedMonth, // dynamically assigned if bulk
         category: category,
         outlet_code: outlet,
@@ -96,4 +133,10 @@ export const processRawData = (data, uploadMonth, groupCode, isBulk = false) => 
       };
     })
     .filter(Boolean); // Remove nulls
+
+  if (debugCallback && debugLogs.length > 0) {
+    debugCallback(debugLogs.join('\n'));
+  }
+  
+  return result;
 };

@@ -165,7 +165,13 @@ export default function UploadPage() {
     
     // YYYY-MM-01 format for easy comparison
     const formattedMonth = isBulk ? null : `${uploadMonth}-01`; 
-    const result = processRawData(data, formattedMonth, null, isBulk);
+    
+    // Pass setDebugInfo to capture debug logs
+    setDebugInfo('');
+    const result = processRawData(data, formattedMonth, null, isBulk, (logs) => {
+      setDebugInfo(logs);
+    });
+    
     setParsedData(result);
     setMessage({ type: 'success', text: `Berhasil memproses ${result.length} baris data valid utilitas.` });
   };
@@ -176,44 +182,54 @@ export default function UploadPage() {
     setMessage(null);
     
     try {
+      // Helper function to chunk large arrays
+      const chunkArray = (arr, size) => Array.from({ length: Math.ceil(arr.length / size) }, (v, i) => arr.slice(i * size, i * size + size));
+
       // 1. Unique months and outlets in the uploaded file
       const uniqueMonths = [...new Set(parsedData.map(r => r.upload_month))];
       const uniqueOutlets = [...new Set(parsedData.map(r => r.outlet_code))];
+      const outletChunks = chunkArray(uniqueOutlets, 40); // 40 items per request to avoid URL too long
       
-      // 2. Fetch OLD summary data for these months and outlets
-      const { data: oldData, error: oldErr } = await supabase
-        .from('a_utilities_outlets')
-        .select('upload_month, group_name, category, total_debit')
-        .in('upload_month', uniqueMonths)
-        .in('outlet_code', uniqueOutlets);
-      if (oldErr) throw oldErr;
-      
-      const oldGrouped = {};
-      (oldData || []).forEach(row => {
-        const key = `${row.upload_month}_${row.group_name}_${row.category}`;
-        if (!oldGrouped[key]) oldGrouped[key] = 0;
-        oldGrouped[key] += row.total_debit;
-      });
-      
-      // 3. Fetch Master Group mapping for the uploaded outlets
-      const { data: outletMapping, error: mapErr } = await supabase
-        .from('a_master_outlet')
-        .select(`
-          outlet_code,
-          a_master_pt (
-            a_master_group (
-              group_name
-            )
-          )
-        `)
-        .in('outlet_code', uniqueOutlets);
-        
-      if (mapErr) throw mapErr;
+      // 2. Fetch Master Group mapping for the uploaded outlets FIRST so we can use it
+      const outletMapping = [];
+      for (const chunk of outletChunks) {
+        const { data, error: mapErr } = await supabase
+          .from('a_master_outlet')
+          .select('outlet_code, custom_groups')
+          .in('outlet_code', chunk);
+        if (mapErr) throw mapErr;
+        outletMapping.push(...(data || []));
+      }
       
       const outletGroupMap = {};
-      (outletMapping || []).forEach(row => {
-        const groupName = row.a_master_pt?.a_master_group?.group_name || 'UNKNOWN';
-        outletGroupMap[row.outlet_code] = groupName;
+      outletMapping.forEach(row => {
+        let g = 'OTHERS';
+        const cg = row.custom_groups || [];
+        if (cg.includes('LIFESTYLE')) g = 'LIFESTYLE';
+        else if (cg.includes('SG')) g = 'SG';
+        else if (cg.includes('SH')) g = 'SH';
+        
+        outletGroupMap[row.outlet_code] = g;
+      });
+
+      // 3. Fetch OLD raw data for these months and outlets, then group them
+      const oldData = [];
+      for (const chunk of outletChunks) {
+        const { data, error: oldErr } = await supabase
+          .from('a_utilities_raw')
+          .select('upload_month, outlet_code, category, debit_amount')
+          .in('upload_month', uniqueMonths)
+          .in('outlet_code', chunk);
+        if (oldErr) throw oldErr;
+        oldData.push(...(data || []));
+      }
+      
+      const oldGrouped = {};
+      oldData.forEach(row => {
+        const groupName = outletGroupMap[row.outlet_code] || 'UNKNOWN';
+        const key = `${row.upload_month}_${groupName}_${row.category}`;
+        if (!oldGrouped[key]) oldGrouped[key] = 0;
+        oldGrouped[key] += row.debit_amount || 0;
       });
       
       // 4. Calculate NEW summary data
@@ -234,7 +250,6 @@ export default function UploadPage() {
         const oldVal = oldGrouped[key] || 0;
         const newVal = newGrouped[key] || 0;
         
-        // Only log if there's a difference and it's not a tiny rounding error
         if (Math.abs(oldVal - newVal) > 0.01) {
           auditLogs.push({
             upload_month: month,
@@ -246,29 +261,39 @@ export default function UploadPage() {
         }
       }
       
-      // 6. Delete old data (only for the months and outlets present in the file)
+      // 6. Delete old data (chunked)
       for (const month of uniqueMonths) {
         const outletsInMonth = [...new Set(parsedData.filter(r => r.upload_month === month).map(r => r.outlet_code))];
-        const { error: delErr } = await supabase
-          .from('a_utilities_raw')
-          .delete()
-          .eq('upload_month', month)
-          .in('outlet_code', outletsInMonth);
-        if (delErr) throw delErr;
+        const monthOutletChunks = chunkArray(outletsInMonth, 40);
+        
+        for (const chunk of monthOutletChunks) {
+          const { error: delErr } = await supabase
+            .from('a_utilities_raw')
+            .delete()
+            .eq('upload_month', month)
+            .in('outlet_code', chunk);
+          if (delErr) throw delErr;
+        }
       }
       
-      // 7. Insert New Data
-      const { error: insErr } = await supabase
-        .from('a_utilities_raw')
-        .insert(parsedData);
-      if (insErr) throw insErr;
+      // 7. Insert New Data (chunked upsert to prevent payload too large or unique constraint errors)
+      const dataChunks = chunkArray(parsedData, 500);
+      for (const chunk of dataChunks) {
+        const { error: insErr } = await supabase
+          .from('a_utilities_raw')
+          .upsert(chunk, { onConflict: 'journal_entry, trx_date, account_number, debit_amount, credit_amount' });
+        if (insErr) throw insErr;
+      }
       
-      // 8. Save Audit Logs
+      // 8. Save Audit Logs (chunked)
       if (auditLogs.length > 0) {
-        const { error: auditErr } = await supabase
-          .from('a_utilities_audit_log')
-          .insert(auditLogs);
-        if (auditErr) console.warn("Failed to save audit logs:", auditErr);
+        const auditChunks = chunkArray(auditLogs, 500);
+        for (const chunk of auditChunks) {
+          const { error: auditErr } = await supabase
+            .from('a_utilities_audit_log')
+            .insert(chunk);
+          if (auditErr) console.warn("Failed to save audit logs:", auditErr);
+        }
       }
       
       setMessage({ type: 'success', text: `Upload & Replace berhasil! ${auditLogs.length} jejak perubahan dicatat ke Riwayat Revisi.` });
@@ -278,8 +303,19 @@ export default function UploadPage() {
       if (fileInput) fileInput.value = '';
       
     } catch (error) {
-      console.error(error);
-      setMessage({ type: 'error', text: 'Terjadi kesalahan saat upload/replace data: ' + error.message });
+      console.error("Upload Error Details:", error);
+      
+      // Log custom extraction for debugging
+      let errMsg = "Unknown Error";
+      if (error instanceof Error) {
+        errMsg = error.message;
+      } else if (error && typeof error === 'object') {
+        errMsg = error.message || error.details || error.hint || JSON.stringify(error);
+      } else {
+        errMsg = String(error);
+      }
+      
+      setMessage({ type: 'error', text: 'Gagal mengupload data: ' + errMsg + '. Pastikan file tidak terlalu besar atau coba mode Bulk.' });
     } finally {
       setIsLoading(false);
     }
@@ -348,11 +384,13 @@ export default function UploadPage() {
             {message.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
             <span>{message.text}</span>
           </div>
-          {message.type === 'error' && debugInfo && (
-            <div className="mt-2 text-xs font-mono bg-white/50 p-2 rounded border border-red-200 whitespace-pre-wrap overflow-auto max-h-40">
-              Debug Info:<br/>{debugInfo}
-            </div>
-          )}
+        </div>
+      )}
+      
+      {debugInfo && (
+        <div className="mt-6 p-4 bg-slate-900 text-green-400 font-mono text-xs rounded-xl overflow-x-auto">
+          <h3 className="text-white font-bold mb-2">DEBUG INFO:</h3>
+          <pre className="whitespace-pre-wrap">{debugInfo}</pre>
         </div>
       )}
       

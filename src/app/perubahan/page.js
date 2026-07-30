@@ -12,8 +12,10 @@ export default function PerubahanDataPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [message, setMessage] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   
-  const groups = ['ALL', 'VC', 'SH', 'SG', 'SP', 'PK', 'IS', 'BB', 'NG', 'SM'];
+  const groups = ['ALL', 'LIFESTYLE', 'SG', 'SH', 'OTHERS'];
 
   const fetchMonthStats = async (month, group) => {
     if (!month) {
@@ -135,6 +137,30 @@ export default function PerubahanDataPage() {
     }
   };
 
+  const handleDeleteAll = async () => {
+    setIsDeletingAll(true);
+    setMessage(null);
+    try {
+      // Menghapus semua data (menggunakan trik neq id tidak valid)
+      const { error } = await supabase
+        .from('a_utilities_raw')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+        
+      if (error) throw error;
+      
+      setMessage({ type: 'success', text: 'Berhasil mereset dan menghapus SELURUH data utilities dari semua bulan. Database sekarang kosong dan bersih!' });
+      setStats(null);
+      setConfirmDeleteAll(false);
+      
+    } catch (error) {
+      console.error(error);
+      setMessage({ type: 'error', text: 'Gagal mereset database: ' + error.message });
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200">
@@ -247,6 +273,52 @@ export default function PerubahanDataPage() {
             )}
           </div>
         )}
+        
+        {/* RESET TOTAL DATABASE SECTION */}
+        <div className="mt-12 pt-8 border-t border-slate-200">
+          <div className="bg-red-50 border border-red-200 rounded-2xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+            <div>
+              <h3 className="text-red-800 font-bold text-xl mb-2 flex items-center gap-2">
+                <AlertTriangle className="w-6 h-6" /> Reset Total (Semua Bulan)
+              </h3>
+              <p className="text-red-700 max-w-xl">
+                Fitur ini akan menghapus <b>seluruh data utilities dari semua bulan dan semua grup</b> sekaligus. Sangat berguna jika Anda ingin mengulang proses dari nol dan melakukan upload Bulk yang baru secara bersih.
+              </p>
+            </div>
+            
+            <div className="flex-shrink-0">
+              {!confirmDeleteAll ? (
+                <button 
+                  onClick={() => setConfirmDeleteAll(true)}
+                  className="px-6 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 shadow-sm flex items-center gap-2 transition-all"
+                >
+                  <Trash2 className="w-5 h-5" /> Hapus Semua Data
+                </button>
+              ) : (
+                <div className="flex flex-col gap-3 bg-white p-4 rounded-xl border border-red-300 shadow-sm">
+                  <span className="text-red-800 font-bold text-center">Anda sangat yakin?</span>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setConfirmDeleteAll(false)}
+                      disabled={isDeletingAll}
+                      className="px-4 py-2 bg-slate-100 text-slate-700 font-medium rounded-lg hover:bg-slate-200 transition-all flex-1"
+                    >
+                      Batal
+                    </button>
+                    <button 
+                      onClick={handleDeleteAll}
+                      disabled={isDeletingAll}
+                      className="px-4 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 disabled:opacity-50 transition-all flex-1"
+                    >
+                      {isDeletingAll ? 'Proses...' : 'Ya, Reset!'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Utility BI Dashboard - Cloud Edition</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome untuk Ikon Filter -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <style>
+        body { padding: 20px; background-color: #f1f5f9; font-family: 'Inter', sans-serif; font-size: 0.85rem; }
+        .container-box { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
+        
+        /* STICKY HEADER LOGIC */
+        .table-responsive { max-height: 75vh; overflow: auto; border: 1px solid #e2e8f0; border-radius: 8px; }
+        table { border-collapse: separate; border-spacing: 0; width: 100%; }
+        thead th { 
+            position: sticky; top: 0; z-index: 10; 
+            background-color: #1e293b !important; color: white !important; 
+            font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+            padding: 12px 8px !important; border: none !important;
+        }
+
+        /* STATUS BADGES */
+        .status-up-high { color: #dc3545; font-weight: bold; } /* Merah */
+        .status-up-med { color: #f59e0b; font-weight: bold; }  /* Kuning/Oranye */
+        .status-down { color: #10b981; font-weight: bold; }    /* Hijau */
+        .status-normal { color: #0ea5e9; }                   /* Biru */
+
+        .editable-note { 
+            background-color: #fffbeb; border: 1px dashed #f59e0b; 
+            padding: 6px; border-radius: 4px; min-width: 200px; outline: none; text-align: left;
+        }
+        .editable-note:focus { background-color: white; border: 1px solid #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+
+        /* FILTER DROPDOWN STYLE */
+        .filter-icon { font-size: 10px; margin-left: 5px; cursor: pointer; color: #94a3b8; }
+        .filter-icon:hover { color: white; }
+        
+        .loading-overlay { 
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(255,255,255,0.8); z-index: 9999; justify-content: center; align-items: center; 
+        }
+    </style>
+</head>
+<body>
+
+<div id="loading" class="loading-overlay">
+    <div class="text-center">
+        <div class="spinner-border text-primary" role="status"></div>
+        <div class="mt-2 fw-bold" id="loadText">Sinkronisasi Data Cloud...</div>
+    </div>
+</div>
+
+<div class="container-fluid container-box">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h3 class="fw-bold text-slate-800">⚡ Monthly Utility Tracker</h3>
+        <div class="d-flex gap-2">
+            <input type="file" id="inputExcel" class="form-control form-control-sm" style="width: 280px;" multiple>
+            <button class="btn btn-sm btn-primary fw-bold" onclick="handleUpload()">🚀 Update Data</button>
+        </div>
+    </div>
+
+    <ul class="nav nav-tabs mb-3" id="mainTabs">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab1">SUMMARY</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab2">ALERTS</button></li>
+    </ul>
+
+    <div class="tab-content">
+        <div class="tab-pane fade show active" id="tab1">
+            <div class="mb-3 d-flex gap-3 align-items-center bg-light p-2 rounded">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="fw-bold">🏢 Outlet:</span>
+                    <input type="text" id="filterOutlet" class="form-control form-control-sm" style="width: 150px;" placeholder="Ketik 2 huruf...">
+                </div>
+                <div class="text-muted" style="font-size: 0.75rem;">
+                    <span class="me-2">🔴 >20% / 3Jt</span>
+                    <span class="me-2">🟡 >10% / 1Jt</span>
+                    <span class="me-2">🟢 Turun</span>
+                </div>
+            </div>
+            
+            <div class="table-responsive">
+                <table id="tableMonthly" class="table table-sm table-hover align-middle text-center">
+                    <thead>
+                        <tr>
+                            <th>OUTLET</th><th>BULAN</th><th>LISTRIK</th><th>PAM</th><th>GAS</th><th>CHILLER</th><th>TELP</th><th>INTERNET</th><th>TOTAL</th><th>CATATAN</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bodyMonthly"></tbody>
+                </table>
+            </div>
+        </div>
+        <!-- Tab Alerts bisa ditambahkan logic serupa -->
+    </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://apwpgonioxhwbkoflcbu.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFwd3Bnb25pb3hod2Jrb2ZsY2J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwMzkxNjUsImV4cCI6MjA5MzYxNTE2NX0.pPJ3wv2DornfDY0kdhFl3Z7hwlp54alNNa_-soBYH5Q";
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const CATEGORIES = ['LISTRIK', 'PAM', 'GAS', 'WATER CHILLER', 'TELP', 'INTERNET'];
+const fmt = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 });
+
+// Helper: Konversi Tanggal Excel ke String "Jan 2026"
+function formatExcelDate(val) {
+    if (!val) return "-";
+    let date;
+    if (typeof val === 'number') {
+        date = new Date((val - 25569) * 86400 * 1000);
+    } else {
+        date = new Date(val);
+    }
+    return date.toLocaleString('id-ID', { month: 'short', year: 'numeric' });
+}
+
+// Helper: Untuk Sorting Periode YYYY-MM
+function getPeriodKey(val) {
+    let d = (typeof val === 'number') ? new Date((val - 25569) * 86400 * 1000) : new Date(val);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+document.addEventListener('DOMContentLoaded', fetchData);
+
+async function fetchData() {
+    showLoading("Menarik Data...");
+    try {
+        const [rawRes, noteRes] = await Promise.all([
+            db.from('raw_transactions').select('*').order('periode_sort', { ascending: true }),
+            db.from('utility_notes').select('*')
+        ]);
+        renderTable(rawRes.data, noteRes.data);
+    } catch (e) { alert(e.message); }
+    finally { hideLoading(); }
+}
+
+function renderTable(rawData, notesData) {
+    const body = document.getElementById('bodyMonthly');
+    body.innerHTML = "";
+
+    const grouped = {};
+    rawData.forEach(row => {
+        const key = `${row.cabang}|${row.bulan_tampil}`;
+        if (!grouped[key]) {
+            grouped[key] = { outlet: row.cabang, bulan: row.bulan_tampil, periode: row.periode_sort, total: 0 };
+            CATEGORIES.forEach(c => grouped[key][c] = 0);
+        }
+        grouped[key][row.utility_category] += row.net_amount;
+        grouped[key].total += row.net_amount;
+    });
+
+    const sortedData = Object.values(grouped).sort((a, b) => a.periode.localeCompare(b.periode) || a.outlet.localeCompare(b.outlet));
+
+    sortedData.forEach((item, idx) => {
+        const tr = document.createElement('tr');
+        
+        // Logic Warna Status (Bandingkan dengan baris sebelumnya jika outlet sama)
+        const getStatusClass = (cat, val) => {
+            const prev = sortedData.find((prevItem, pIdx) => pIdx < idx && prevItem.outlet === item.outlet && prevItem.periode < item.periode);
+            if (!prev || !prev[cat] || val <= 0) return 'status-normal';
+            const diff = val - prev[cat];
+            const pct = (diff / prev[cat]) * 100;
+            if (pct > 20 || diff > 3000000) return 'status-up-high';
+            if (pct > 10 || diff > 1000000) return 'status-up-med';
+            if (diff < 0) return 'status-down';
+            return 'status-normal';
+        };
+
+        const note = notesData.find(n => n.cabang === item.outlet && n.bulan_tampil === item.bulan)?.catatan || "";
+
+        tr.innerHTML = `
+            <td class="fw-bold text-start ps-3">${item.outlet}</td>
+            <td class="text-secondary">${item.bulan}</td>
+            ${CATEGORIES.map(c => `<td class="${getStatusClass(c, item[c])}">${item[c] > 0 ? fmt.format(item[c]) : '-'}</td>`).join('')}
+            <td class="fw-bold bg-light">${fmt.format(item.total)}</td>
+            <td><div contenteditable="true" class="editable-note" onblur="saveNote('${item.outlet}','${item.bulan}',this.innerText)">${note}</div></td>
+        `;
+        body.appendChild(tr);
+    });
+}
+
+async function handleUpload() {
+    const files = document.getElementById('inputExcel').files;
+    if (!files.length) return;
+    showLoading("Memproses Excel...");
+    
+    // Logic upload sama seperti sebelumnya, namun gunakan formatExcelDate() untuk bulan_tampil
+    // dan getPeriodKey() untuk periode_sort agar sorting di database benar.
+    // ... (Gunakan fungsi uploader JS Anda yang sebelumnya)
+}
+
+async function saveNote(cabang, bulan, teks) {
+    await db.from('utility_notes').upsert({ cabang, bulan_tampil: bulan, catatan: teks, tipe_tabel: 'MONTHLY' }, { onConflict: 'cabang, bulan_tampil, tipe_tabel' });
+}
+
+document.getElementById('filterOutlet').addEventListener('input', function(e) {
+    const val = e.target.value.toUpperCase();
+    document.querySelectorAll('#tableMonthly tbody tr').forEach(row => {
+        row.style.display = (val.length < 2 || row.cells[0].innerText.includes(val)) ? '' : 'none';
+    });
+});
+
+function showLoading(txt) { document.getElementById('loading').style.display = 'flex'; document.getElementById('loadText').innerText = txt; }
+function hideLoading() { document.getElementById('loading').style.display = 'none'; }
+</script>
+</body>
+</html>

@@ -63,10 +63,10 @@ export default function Dashboard() {
         compareDataList = rawCompareData || [];
       }
       
-      // Fetch ALL M+1 data regardless of month to mark the dashboard
-      const { data: mPlus1Data, error: m1Error } = await supabase.from('a_utilities_raw')
+      // Fetch active M+1 data from the new management table
+      const { data: mPlus1Data, error: m1Error } = await supabase.from('a_utilities_mplus1')
         .select('outlet_code, category')
-        .like('account_number', '2%');
+        .eq('is_active', true);
         
       if (!m1Error && mPlus1Data) {
         const m1Set = new Set();

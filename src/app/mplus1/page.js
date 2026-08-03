@@ -1,232 +1,197 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Download, X, Calendar } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import { formatUIDate } from '@/utils/dateFormatter';
+import { Power, Plus, Trash2, ShieldAlert } from 'lucide-react';
 
 export default function MPlus1Page() {
-  const [targetYear, setTargetYear] = useState('');
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  
-  const [urlOutlet, setUrlOutlet] = useState(null);
-  const [urlCategory, setUrlCategory] = useState(null);
+  const [mPlus1Data, setMPlus1Data] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isAdding, setIsAdding] = useState(false);
+  const [newOutlet, setNewOutlet] = useState('');
+  const [newCategory, setNewCategory] = useState('Listrik');
 
-  useEffect(() => {
-    let initialYear = new Date().getFullYear().toString();
-    
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('year')) initialYear = params.get('year');
-      if (params.get('outlet')) setUrlOutlet(params.get('outlet'));
-      if (params.get('category')) setUrlCategory(params.get('category'));
-    }
-    setTargetYear(initialYear);
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-  }, [targetYear, urlOutlet, urlCategory]);
-
-  const fetchData = async () => {
-    if (!targetYear) return;
+  const fetchMPlus1Data = async () => {
     setLoading(true);
     try {
-      const startDate = `${targetYear}-01-01`;
-      const endDate = `${targetYear}-12-31`;
-      
-      let query = supabase.from('a_utilities_raw')
+      const { data, error } = await supabase
+        .from('a_utilities_mplus1')
         .select('*')
-        .gte('upload_month', startDate)
-        .lte('upload_month', endDate)
-        .order('upload_month', { ascending: false })
-        .order('trx_date', { ascending: false });
+        .order('outlet_code', { ascending: true });
         
-      if (urlOutlet) query = query.eq('outlet_code', urlOutlet);
-      if (urlCategory) {
-        query = query.eq('category', urlCategory);
-      }
-      
-      const { data: rawData, error } = await query.limit(50000);
-      
       if (error) throw error;
-      
-      setData(rawData || []);
-    } catch (error) {
-      console.error('Error fetching M+1 data:', error);
+      setMPlus1Data(data || []);
+    } catch (err) {
+      console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
-  const clearFilters = () => {
-    setUrlOutlet(null);
-    setUrlCategory(null);
+  useEffect(() => {
+    fetchMPlus1Data();
+  }, []);
+
+  const handleToggle = async (id, currentStatus) => {
+    try {
+      // Optimistic UI update
+      setMPlus1Data(prev => prev.map(item => item.id === id ? { ...item, is_active: !currentStatus } : item));
+      
+      const { error } = await supabase
+        .from('a_utilities_mplus1')
+        .update({ is_active: !currentStatus })
+        .eq('id', id);
+        
+      if (error) throw error;
+    } catch (err) {
+      console.error(err);
+      // Revert on error
+      fetchMPlus1Data();
+    }
   };
 
-  // 1. Identify which (outlet, category) pairs have at least one accrued (account_number starts with 2)
-  // 2. Group all data (both normal and accrued) for those pairs
-  const groupedData = React.useMemo(() => {
-    const accruedPairs = new Set();
-    data.forEach(d => {
-      if (d.account_number.startsWith('2')) {
-        accruedPairs.add(`${d.outlet_code}_${d.category}`);
-      }
-    });
-
-    const groups = {};
-    data.forEach(d => {
-      if (accruedPairs.has(`${d.outlet_code}_${d.category}`)) {
-        if (!groups[d.outlet_code]) groups[d.outlet_code] = {};
-        if (!groups[d.outlet_code][d.category]) groups[d.outlet_code][d.category] = [];
-        groups[d.outlet_code][d.category].push(d);
-      }
-    });
-    return groups;
-  }, [data]);
-
-  const exportExcel = () => {
-    const exportData = [];
-    Object.keys(groupedData).forEach(outlet => {
-      Object.keys(groupedData[outlet]).forEach(cat => {
-        groupedData[outlet][cat].forEach(d => {
-           exportData.push({
-             'Outlet': d.outlet_code,
-             'Kategori': d.category,
-             'Bulan Data': d.upload_month,
-             'Trx Date': d.trx_date,
-             'Status': d.account_number.startsWith('2') ? 'ACCRUED (M+1)' : 'NORMAL',
-             'Account Number': d.account_number,
-             'Account Description': d.account_description,
-             'Journal Entry': d.journal_entry,
-             'Nominal': d.credit_amount > 0 ? d.credit_amount : d.debit_amount,
-             'Referensi': d.reference
-           });
-        });
-      });
-    });
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if (!newOutlet.trim()) return;
     
-    if (exportData.length === 0) return;
+    try {
+      const { error } = await supabase
+        .from('a_utilities_mplus1')
+        .insert({
+          outlet_code: newOutlet.trim().toUpperCase(),
+          category: newCategory,
+          is_active: true
+        });
+        
+      if (error) {
+        if (error.code === '23505') alert('Outlet dan Kategori ini sudah ada di daftar!');
+        else throw error;
+      } else {
+        setNewOutlet('');
+        setIsAdding(false);
+        fetchMPlus1Data();
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Gagal menambah data');
+    }
+  };
 
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'M+1 Analysis');
-    XLSX.writeFile(wb, `Export_MPlus1_Analysis_${targetYear}.xlsx`);
+  const handleDelete = async (id) => {
+    if (!confirm('Hapus konfigurasi ini secara permanen?')) return;
+    try {
+      const { error } = await supabase.from('a_utilities_mplus1').delete().eq('id', id);
+      if (error) throw error;
+      fetchMPlus1Data();
+    } catch (err) {
+      console.error(err);
+      alert('Gagal menghapus');
+    }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <label className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-blue-600" />
-            Tahun Analisis:
-          </label>
-          <select 
-            value={targetYear} 
-            onChange={(e) => setTargetYear(e.target.value)} 
-            className="px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800"
-          >
-            {[2023, 2024, 2025, 2026, 2027].map(y => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
-          
-          {(urlOutlet || urlCategory) && (
-            <div className="flex items-center gap-2 border-l border-slate-200 pl-4">
-              <span className="text-xs text-slate-500 font-bold uppercase">Filter:</span>
-              {urlOutlet && <span className="px-2 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded">{urlOutlet}</span>}
-              {urlCategory && <span className="px-2 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded">{urlCategory}</span>}
-              <button onClick={clearFilters} className="text-slate-400 hover:text-red-500 transition-colors">
-                <X className="w-4 h-4" />
-              </button>
+    <div className="space-y-6 max-w-5xl mx-auto">
+      <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200">
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-3">
+            <Power className="w-8 h-8 text-pink-500" />
+            <div>
+              <h1 className="text-2xl font-bold text-slate-800">Manajemen M+1</h1>
+              <p className="text-slate-500 text-sm">Atur utilitas mana saja yang statusnya menunggak 1 bulan (M+1)</p>
             </div>
+          </div>
+          
+          <button 
+            onClick={() => setIsAdding(!isAdding)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" /> {isAdding ? 'Batal' : 'Tambah Baru'}
+          </button>
+        </div>
+
+        {isAdding && (
+          <form onSubmit={handleAdd} className="mb-8 p-6 bg-blue-50 border border-blue-200 rounded-xl flex flex-wrap items-end gap-4">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-sm font-bold text-slate-700 mb-1">Kode Outlet</label>
+              <input 
+                type="text" 
+                required
+                value={newOutlet}
+                onChange={e => setNewOutlet(e.target.value)}
+                placeholder="Contoh: SGCMC"
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-blue-500 font-bold uppercase"
+              />
+            </div>
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-sm font-bold text-slate-700 mb-1">Kategori Utilitas</label>
+              <select 
+                value={newCategory}
+                onChange={e => setNewCategory(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-blue-500 font-bold"
+              >
+                <option value="Listrik">Listrik</option>
+                <option value="PAM">PAM</option>
+                <option value="Gas">Gas</option>
+                <option value="Telp">Telp</option>
+                <option value="Internet">Internet</option>
+                <option value="FCU (WATER CHILLER)">FCU (WATER CHILLER)</option>
+              </select>
+            </div>
+            <button type="submit" className="px-6 py-2.5 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors">
+              Simpan
+            </button>
+          </form>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {loading ? (
+            <div className="col-span-full py-12 text-center text-slate-500">Memuat data...</div>
+          ) : mPlus1Data.length === 0 ? (
+            <div className="col-span-full py-16 text-center text-slate-500 flex flex-col items-center">
+              <ShieldAlert className="w-12 h-12 text-slate-300 mb-3" />
+              Belum ada data konfigurasi M+1.
+            </div>
+          ) : (
+            Object.keys(mPlus1Data.reduce((acc, row) => {
+              if (!acc[row.outlet_code]) acc[row.outlet_code] = [];
+              acc[row.outlet_code].push(row);
+              return acc;
+            }, {})).sort().map(outlet => {
+              const rows = mPlus1Data.filter(r => r.outlet_code === outlet);
+              return (
+                <div key={outlet} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col hover:shadow-md transition-shadow">
+                  <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 font-bold text-slate-800 text-lg flex justify-between items-center">
+                    {outlet}
+                  </div>
+                  <div className="p-5 flex flex-col gap-4">
+                    {rows.map(row => (
+                      <div key={row.id} className="flex items-center justify-between pb-3 border-b border-slate-100 last:border-0 last:pb-0">
+                        <span className="text-sm font-bold text-slate-600">{row.category}</span>
+                        <div className="flex items-center gap-4">
+                          <button 
+                            onClick={() => handleToggle(row.id, row.is_active)}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${row.is_active ? 'bg-pink-500' : 'bg-slate-300'}`}
+                            title={row.is_active ? "Nonaktifkan M+1" : "Aktifkan M+1"}
+                          >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${row.is_active ? 'translate-x-6' : 'translate-x-1'}`} />
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(row.id)}
+                            className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-colors"
+                            title="Hapus dari daftar"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
-        <button onClick={exportExcel} className="flex items-center gap-2 px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-bold transition-colors">
-          <Download className="w-4 h-4" /> Export Excel
-        </button>
       </div>
-
-      <div className="mb-6">
-        <h2 className="text-lg font-bold text-slate-800 uppercase tracking-wide">Laporan M+1 (Accrued Expenses)</h2>
-        <p className="text-xs text-slate-500">Daftar biaya utilitas yang memiliki catatan accrued (M+1) di tahun {targetYear}. Menampilkan history dari Jan - Des.</p>
-      </div>
-      
-      {loading ? (
-        <div className="py-20 flex items-center justify-center text-slate-500 bg-white rounded-2xl shadow-sm border border-slate-200">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
-          Memproses Data...
-        </div>
-      ) : Object.keys(groupedData).length === 0 ? (
-        <div className="py-20 flex items-center justify-center text-slate-400 text-sm border-2 border-dashed border-slate-200 bg-slate-50 rounded-xl font-medium">
-          Tidak ada data Accrued (M+1) yang ditemukan untuk {targetYear}.
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {Object.keys(groupedData).sort().map(outlet => (
-            <div key={outlet} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="bg-slate-800 px-5 py-3">
-                <h3 className="text-white font-black text-lg tracking-wider">{outlet}</h3>
-              </div>
-              
-              <div className="p-5 overflow-x-auto">
-                <div className="flex gap-6 min-w-max">
-                  {Object.keys(groupedData[outlet]).sort().map(cat => (
-                    <div key={cat} className="flex-none w-[600px] border border-slate-200 rounded-xl overflow-hidden flex flex-col">
-                      <div className="bg-blue-50 px-4 py-2 border-b border-slate-200">
-                        <span className="font-bold text-blue-800 uppercase tracking-wider">{cat}</span>
-                      </div>
-                      <div className="flex-1 overflow-y-auto max-h-[400px]">
-                        <table className="min-w-full divide-y divide-slate-200 text-[11px]">
-                          <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-                            <tr>
-                              <th className="px-3 py-2 text-left font-bold text-slate-600 uppercase">Bulan</th>
-                              <th className="px-3 py-2 text-left font-bold text-slate-600 uppercase">Trx Date</th>
-                              <th className="px-3 py-2 text-left font-bold text-slate-600 uppercase">Account</th>
-                              <th className="px-3 py-2 text-left font-bold text-slate-600 uppercase">Desc / Ref</th>
-                              <th className="px-3 py-2 text-right font-bold text-slate-600 uppercase">Nominal</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 bg-white">
-                            {groupedData[outlet][cat].map((d, i) => {
-                              const isAccrued = d.account_number.startsWith('2');
-                              return (
-                                <tr key={i} className={`hover:bg-opacity-80 transition-colors ${isAccrued ? 'bg-pink-50' : 'bg-white hover:bg-slate-50'}`}>
-                                  <td className="px-3 py-2 whitespace-nowrap text-slate-600 font-medium">
-                                    {formatUIDate(d.upload_month)}
-                                  </td>
-                                  <td className="px-3 py-2 whitespace-nowrap text-slate-500">
-                                    {formatUIDate(d.trx_date)}
-                                  </td>
-                                  <td className="px-3 py-2 whitespace-nowrap">
-                                    <span className={`font-mono ${isAccrued ? 'text-pink-600 font-bold' : 'text-slate-500'}`}>
-                                      {d.account_number}
-                                    </span>
-                                  </td>
-                                  <td className="px-3 py-2 text-slate-600 min-w-[200px]">
-                                    <div className="font-medium line-clamp-1" title={d.account_description}>{d.account_description}</div>
-                                    <div className="text-[10px] text-slate-400 mt-0.5 line-clamp-1" title={d.reference}>{d.reference}</div>
-                                  </td>
-                                  <td className={`px-3 py-2 whitespace-nowrap text-right font-bold ${isAccrued ? 'text-pink-600' : 'text-slate-700'}`}>
-                                    {(d.credit_amount > 0 ? d.credit_amount : d.debit_amount).toLocaleString('id-ID')}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

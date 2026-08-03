@@ -30,6 +30,10 @@ export default function AnalisaPage() {
     let targetD = new Date(now.getFullYear(), now.getMonth(), 1);
     
     if (typeof window !== 'undefined') {
+      const savedTarget = localStorage.getItem('preferred_target_month');
+      const savedCompare = localStorage.getItem('preferred_compare_month');
+      if (savedTarget) currentMonthStr = savedTarget;
+      
       const params = new URLSearchParams(window.location.search);
       const outlet = params.get('outlet');
       if (outlet) {
@@ -38,13 +42,24 @@ export default function AnalisaPage() {
       const monthParam = params.get('month');
       if (monthParam) {
         currentMonthStr = monthParam;
-        const [y, m] = monthParam.split('-');
-        targetD = new Date(parseInt(y), parseInt(m) - 1, 1);
+      }
+      
+      const [y, m] = currentMonthStr.split('-');
+      targetD = new Date(parseInt(y), parseInt(m) - 1, 1);
+      
+      if (savedCompare && !monthParam) {
+        // If we have a saved compare month and aren't forcing via URL, use it
+        // We'll set it at the end
       }
     }
     
     const prevDate = new Date(targetD.getFullYear(), targetD.getMonth() - 1, 1);
-    const prevMonthStr = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+    let prevMonthStr = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+    
+    if (typeof window !== 'undefined' && !new URLSearchParams(window.location.search).get('month')) {
+      const savedCompare = localStorage.getItem('preferred_compare_month');
+      if (savedCompare) prevMonthStr = savedCompare;
+    }
     
     setTargetMonth(currentMonthStr);
     setCompareMonth(prevMonthStr);
@@ -195,19 +210,26 @@ export default function AnalisaPage() {
       <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
           <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Target Bulan:</label>
-          <input type="month" value={targetMonth} onChange={(e) => {
-            setTargetMonth(e.target.value);
-            if (e.target.value) {
-              const [yy, mm] = e.target.value.split('-');
-              const d = new Date(parseInt(yy), parseInt(mm) - 1, 1);
-              d.setMonth(d.getMonth() - 1);
-              setCompareMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-            }
-          }} className="px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800" />
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Bulan Lalu:</label>
-          <input type="month" value={compareMonth} onChange={(e) => setCompareMonth(e.target.value)} className="px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800" />
+            <input type="month" value={targetMonth} onChange={(e) => {
+              const val = e.target.value;
+              setTargetMonth(val);
+              if (val) {
+                localStorage.setItem('preferred_target_month', val);
+                const [yy, mm] = val.split('-');
+                const d = new Date(parseInt(yy), parseInt(mm) - 1, 1);
+                d.setMonth(d.getMonth() - 1);
+                const cmp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                setCompareMonth(cmp);
+                localStorage.setItem('preferred_compare_month', cmp);
+              }
+            }} className="px-2 py-1 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800" />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Pembanding:</label>
+            <input type="month" value={compareMonth} onChange={(e) => {
+              setCompareMonth(e.target.value);
+              if (e.target.value) localStorage.setItem('preferred_compare_month', e.target.value);
+            }} className="px-2 py-1 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800" />
         </div>
       </div>
 

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { TrendingUp, Search, Check } from 'lucide-react';
 import { formatUIDate } from '@/utils/dateFormatter';
 
@@ -18,11 +18,17 @@ export default function GrafikPage() {
   const [showOutletDropdown, setShowOutletDropdown] = useState(false);
   const categories = ['Listrik', 'PAM', 'Gas', 'Telp', 'Internet'];
   const [selectedUtilities, setSelectedUtilities] = useState(categories);
+  const [activeLines, setActiveLines] = useState({}); // { [outlet]: 'category' }
   
   const dropdownRef = useRef(null);
 
   useEffect(() => {
     let initialYear = new Date().getFullYear().toString();
+    const savedYear = localStorage.getItem('preferred_target_year');
+    if (savedYear) {
+      initialYear = savedYear;
+    }
+    
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('year')) {
@@ -127,13 +133,11 @@ export default function GrafikPage() {
       <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
           <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Tahun Grafik:</label>
-          <input 
-            type="number" 
-            value={targetYear} 
-            onChange={(e) => setTargetYear(e.target.value)} 
-            min="2020" max="2100"
-            className="px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800 w-24" 
-          />
+          <input type="number" min="2020" max="2050" value={targetYear} onChange={(e) => {
+              const val = e.target.value;
+              setTargetYear(val);
+              if (val) localStorage.setItem('preferred_target_year', val);
+            }} className="px-3 py-1.5 w-24 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800" />
         </div>
       </div>
 
@@ -170,7 +174,16 @@ export default function GrafikPage() {
                   </div>
                 </div>
                 <div className="max-h-60 overflow-y-auto p-1">
-                  {outlets.filter(r => r.toLowerCase().includes(outletSearch.toLowerCase())).map((outlet, i) => {
+                  {outlets
+                    .filter(r => r.toLowerCase().includes(outletSearch.toLowerCase()))
+                    .sort((a, b) => {
+                      const aSel = selectedOutlets.includes(a);
+                      const bSel = selectedOutlets.includes(b);
+                      if (aSel && !bSel) return -1;
+                      if (!aSel && bSel) return 1;
+                      return a.localeCompare(b);
+                    })
+                    .map((outlet, i) => {
                     const isSelected = selectedOutlets.includes(outlet);
                     return (
                       <div 
@@ -233,7 +246,7 @@ export default function GrafikPage() {
 
                   <div className="h-[400px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={data[outlet]} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                      <ComposedChart data={data[outlet]} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                         <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 11, fontWeight: 'bold'}} />
                         <YAxis orientation="left" stroke="#64748b" axisLine={false} tickLine={false} tick={{fontSize: 11}} 
@@ -245,12 +258,25 @@ export default function GrafikPage() {
                           cursor={{fill: '#f1f5f9'}}
                         />
                         <Legend wrapperStyle={{paddingTop: '20px', fontSize: '12px', fontWeight: 'bold'}} />
-                        {selectedUtilities.includes('Listrik') && <Bar dataKey="Listrik" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50} />}
-                        {selectedUtilities.includes('PAM') && <Bar dataKey="PAM" fill="#0ea5e9" radius={[4, 4, 0, 0]} maxBarSize={50} />}
-                        {selectedUtilities.includes('Gas') && <Bar dataKey="Gas" fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={50} />}
-                        {selectedUtilities.includes('Telp') && <Bar dataKey="Telp" fill="#8b5cf6" radius={[4, 4, 0, 0]} maxBarSize={50} />}
-                        {selectedUtilities.includes('Internet') && <Bar dataKey="Internet" fill="#ec4899" radius={[4, 4, 0, 0]} maxBarSize={50} />}
-                      </BarChart>
+                        
+                        {selectedUtilities.includes('Listrik') && <Bar dataKey="Listrik" onClick={() => setActiveLines(prev => ({...prev, [outlet]: prev[outlet] === 'Listrik' ? null : 'Listrik'}))} cursor="pointer" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50} />}
+                        {selectedUtilities.includes('PAM') && <Bar dataKey="PAM" onClick={() => setActiveLines(prev => ({...prev, [outlet]: prev[outlet] === 'PAM' ? null : 'PAM'}))} cursor="pointer" fill="#0ea5e9" radius={[4, 4, 0, 0]} maxBarSize={50} />}
+                        {selectedUtilities.includes('Gas') && <Bar dataKey="Gas" onClick={() => setActiveLines(prev => ({...prev, [outlet]: prev[outlet] === 'Gas' ? null : 'Gas'}))} cursor="pointer" fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={50} />}
+                        {selectedUtilities.includes('Telp') && <Bar dataKey="Telp" onClick={() => setActiveLines(prev => ({...prev, [outlet]: prev[outlet] === 'Telp' ? null : 'Telp'}))} cursor="pointer" fill="#8b5cf6" radius={[4, 4, 0, 0]} maxBarSize={50} />}
+                        {selectedUtilities.includes('Internet') && <Bar dataKey="Internet" onClick={() => setActiveLines(prev => ({...prev, [outlet]: prev[outlet] === 'Internet' ? null : 'Internet'}))} cursor="pointer" fill="#ec4899" radius={[4, 4, 0, 0]} maxBarSize={50} />}
+                        
+                        {activeLines[outlet] && (
+                          <Line 
+                            type="monotone" 
+                            dataKey={activeLines[outlet]} 
+                            stroke="#0f172a" 
+                            strokeWidth={3} 
+                            dot={{r: 4, strokeWidth: 2, fill: '#fff'}} 
+                            activeDot={{r: 6}} 
+                            isAnimationActive={true}
+                          />
+                        )}
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                   

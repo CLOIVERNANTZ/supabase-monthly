@@ -7,6 +7,16 @@ import { Trash2, AlertTriangle, Search, CheckCircle2, ShieldAlert } from 'lucide
 export default function PerubahanDataPage() {
   const [selectedMonth, setSelectedMonth] = useState('');
   const [selectedGroup, setSelectedGroup] = useState('ALL');
+  
+  useEffect(() => {
+    const savedTarget = localStorage.getItem('preferred_target_month');
+    if (savedTarget) {
+      setSelectedMonth(savedTarget);
+    } else {
+      const now = new Date();
+      setSelectedMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+    }
+  }, []);
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -175,12 +185,16 @@ export default function PerubahanDataPage() {
         <div className="mb-8 p-6 bg-slate-50 border border-slate-200 rounded-xl">
           <label className="block text-sm font-bold text-slate-700 mb-2">Pilih Bulan & Group yang Ingin Dikelola / Dihapus</label>
           <div className="flex flex-wrap gap-4">
-            <input 
-              type="month" 
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none w-full max-w-xs font-medium text-lg"
-            />
+              <input 
+                type="month" 
+                value={selectedMonth}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedMonth(val);
+                  if (val) localStorage.setItem('preferred_target_month', val);
+                }}
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 transition-colors"
+              />
             <select
               value={selectedGroup}
               onChange={(e) => setSelectedGroup(e.target.value)}

@@ -10,6 +10,17 @@ const formatCurrency = (amount) => {
 
 export default function CountPage() {
   const [targetMonth, setTargetMonth] = useState('');
+  
+  useEffect(() => {
+    const savedTarget = localStorage.getItem('preferred_target_month');
+    if (savedTarget) {
+      setTargetMonth(savedTarget);
+    } else {
+      const now = new Date();
+      const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      setTargetMonth(currentMonthStr);
+    }
+  }, []);
   const [loading, setLoading] = useState(false);
   const [groupedData, setGroupedData] = useState([]);
   const [outletGroups, setOutletGroups] = useState({});
@@ -212,7 +223,11 @@ export default function CountPage() {
           <input 
             type="month" 
             value={targetMonth} 
-            onChange={(e) => setTargetMonth(e.target.value)} 
+            onChange={(e) => {
+              const val = e.target.value;
+              setTargetMonth(val);
+              if (val) localStorage.setItem('preferred_target_month', val);
+            }} 
             className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-bold text-slate-800" 
           />
           <button 

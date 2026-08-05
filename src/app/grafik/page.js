@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { TrendingUp, Search, Check } from 'lucide-react';
 import { formatUIDate } from '@/utils/dateFormatter';
+import GrafikDB2 from './GrafikDB2';
 
 export default function GrafikPage() {
   const [targetYear, setTargetYear] = useState('');
@@ -19,6 +20,7 @@ export default function GrafikPage() {
   const categories = ['Listrik', 'PAM', 'Gas', 'Telp', 'Internet'];
   const [selectedUtilities, setSelectedUtilities] = useState(categories);
   const [activeLines, setActiveLines] = useState({}); // { [outlet]: 'category' }
+  const [db2Mappings, setDb2Mappings] = useState({}); // { outlet_code: mapping_db2 }
   
   const dropdownRef = useRef(null);
 
@@ -65,12 +67,7 @@ export default function GrafikPage() {
       
       let currentSelection = selectedOutlets;
       
-      if (currentSelection.length === 0 && uniqueOutlets.length > 0) {
-        currentSelection = [uniqueOutlets[0]];
-        setSelectedOutlets(currentSelection);
-        // Returning here because the state update will trigger another useEffect run
-        return;
-      }
+
       
       if (currentSelection.length === 0) {
         setLoading(false);
@@ -88,6 +85,19 @@ export default function GrafikPage() {
         .limit(50000);
         
       if (error) throw error;
+      
+      // Fetch DB2 mappings
+      const { data: mappingData } = await supabase.from('a_master_outlet')
+        .select('outlet_code, mapping_db2')
+        .in('outlet_code', currentSelection);
+      
+      if (mappingData) {
+        const mappings = {};
+        mappingData.forEach(row => {
+          mappings[row.outlet_code] = row.mapping_db2 || row.outlet_code;
+        });
+        setDb2Mappings(mappings);
+      }
       
       processData(rawData || [], currentSelection);
     } catch (error) {
@@ -305,8 +315,13 @@ export default function GrafikPage() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* AREA UNTUK GRAFIK DATABASE 2 (DARI AI LAIN) */}
+                  <GrafikDB2 selectedOutlets={[db2Mappings[outlet] || outlet]} targetYear={targetYear} />
+
                 </div>
-              )})
+                );
+              })
             )}
           </div>
         )}

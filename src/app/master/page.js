@@ -75,6 +75,17 @@ export default function MasterData() {
     }
   };
 
+  const handleUpdateMapping = async (id, value) => {
+    try {
+      const { error } = await supabase.from('a_master_outlet').update({ mapping_db2: value || null }).eq('id', id);
+      if (error) throw error;
+      setOutlets(outlets.map(o => o.id === id ? { ...o, mapping_db2: value || null } : o));
+      showMsg('Berhasil menyimpan mapping DB2.');
+    } catch (err) {
+      showMsg(err.message, 'error');
+    }
+  };
+
   // CSV OUTLET UPLOAD
   const handleCSVUpload = (e) => {
     const file = e.target.files[0];
@@ -281,6 +292,7 @@ export default function MasterData() {
                       <th className="px-4 py-3 text-left font-medium text-slate-500">Nama Outlet</th>
                       <th className="px-4 py-3 text-left font-medium text-slate-500">PT</th>
                       <th className="px-4 py-3 text-left font-medium text-slate-500">Brand</th>
+                      <th className="px-4 py-3 text-left font-medium text-slate-500">Nama DB 2</th>
                       <th className="px-4 py-3 text-center font-medium text-slate-500">SH</th>
                       <th className="px-4 py-3 text-center font-medium text-slate-500">SG</th>
                       <th className="px-4 py-3 text-center font-medium text-slate-500">LIFESTYLE</th>
@@ -295,6 +307,19 @@ export default function MasterData() {
                           <td className="px-4 py-3 text-slate-600">{out.outlet_name}</td>
                           <td className="px-4 py-3 text-slate-600">{out.pt_name || '-'}</td>
                           <td className="px-4 py-3 text-slate-600">{out.brand_name || '-'}</td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="text"
+                              defaultValue={out.mapping_db2 || ''}
+                              onBlur={(e) => {
+                                if (e.target.value !== (out.mapping_db2 || '')) {
+                                  handleUpdateMapping(out.id, e.target.value);
+                                }
+                              }}
+                              className="w-24 lg:w-32 px-2 py-1 text-xs border border-slate-200 rounded focus:border-blue-400 focus:outline-none bg-slate-50 hover:bg-white"
+                              placeholder="= Kode"
+                            />
+                          </td>
                           {['SH', 'SG', 'LIFESTYLE'].map(grp => (
                             <td key={grp} className="px-4 py-3 text-center">
                               <button 

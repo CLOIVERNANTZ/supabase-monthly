@@ -100,20 +100,26 @@ export default function Dashboard() {
         setNotesMap(nMap);
       }
       
-      const { data: outletData } = await supabase.from('a_master_outlet').select('outlet_code, custom_groups');
+      const { data: outletData } = await supabase.from('a_master_outlet').select('outlet_code, custom_groups, yang_masuk, order_index');
+      
+      const outletMap = {};
+      const orderMap = {};
+      const statusMap = {};
+      
       if (outletData) {
-        const outletMap = {};
         outletData.forEach(o => {
           let groups = o.custom_groups || [];
           if (typeof groups === 'string') {
             try { groups = JSON.parse(groups); } catch(e){ groups = []; }
           }
           outletMap[o.outlet_code] = Array.isArray(groups) ? groups : [];
+          orderMap[o.outlet_code] = o.order_index ?? 9999;
+          statusMap[o.outlet_code] = o.yang_masuk !== false;
         });
         setOutletGroups(outletMap);
       }
       
-      processData(rawTargetData || [], compareDataList);
+      processData(rawTargetData || [], compareDataList, orderMap, statusMap);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -124,11 +130,19 @@ export default function Dashboard() {
   const allCategories = ['Listrik', 'PAM', 'Gas', 'FCU (WATER CHILLER)', 'Telp', 'Internet'];
   const categories = filterCategory ? [filterCategory] : allCategories;
 
-  const processData = (targetData, compareDataList) => {
-    const outlets = [...new Set([...targetData.map(d => d.outlet_code), ...compareDataList.map(d => d.outlet_code)])].sort();
+  const processData = (targetData, compareDataList, orderMap = {}, statusMap = {}) => {
+    const rawOutlets = [...new Set([...targetData.map(d => d.outlet_code), ...compareDataList.map(d => d.outlet_code)])];
+    
+    // Sort outlets based on order_index
+    const outlets = rawOutlets.sort((a, b) => {
+      const orderA = orderMap[a] ?? 9999;
+      const orderB = orderMap[b] ?? 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.localeCompare(b);
+    });
     
     const processed = outlets.map(outlet => {
-      const row = { Outlet: outlet };
+      const row = { Outlet: outlet, yang_masuk: statusMap[outlet] !== false };
       categories.forEach(cat => {
         const tAmt = targetData.filter(d => d.outlet_code === outlet && d.category === cat).reduce((sum, d) => sum + d.debit_amount - d.credit_amount, 0);
         const cAmt = compareDataList.filter(d => d.outlet_code === outlet && d.category === cat).reduce((sum, d) => sum + d.debit_amount - d.credit_amount, 0);
@@ -541,18 +555,21 @@ export default function Dashboard() {
                 const rowsRendered = new Set();
                 const filteredData = getFilteredData();
                 
-                const renderRowsForGroup = (groupName, rows) => {
+                const activeData = filteredData.filter(r => r.yang_masuk !== false);
+                const inactiveData = filteredData.filter(r => r.yang_masuk === false);
+                
+                const renderRowsForGroup = (groupName, rows, isInactive = false) => {
                   if (rows.length === 0) return null;
                   return (
                     <React.Fragment key={`group_${groupName}`}>
                       <tr>
-                        <td colSpan={compareMonth ? categories.length * 5 + 1 : categories.length + 1} className="bg-slate-200 px-4 py-2 font-bold text-slate-800 text-left uppercase sticky left-0 z-20">
+                        <td colSpan={compareMonth ? categories.length * 5 + 1 : categories.length + 1} className={`px-4 py-2 font-bold text-left uppercase sticky left-0 z-20 ${isInactive ? 'bg-slate-300 text-slate-500' : 'bg-slate-200 text-slate-800'}`}>
                           {groupName}
                         </td>
                       </tr>
                       {rows.map((row, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-2 whitespace-nowrap text-xs font-bold text-slate-700 bg-white sticky left-0 z-10 border-r border-b border-slate-200">
+                        <tr key={idx} className={`hover:bg-slate-50 transition-colors ${isInactive ? 'opacity-50 grayscale' : ''}`}>
+                          <td className={`px-4 py-2 whitespace-nowrap text-xs font-bold bg-white sticky left-0 z-10 border-r border-b border-slate-200 ${isInactive ? 'text-slate-400' : 'text-slate-700'}`}>
                             {row.Outlet}
                           </td>
                           
@@ -649,17 +666,24 @@ export default function Dashboard() {
                 };
 
                 const elements = [];
+                // 1. Render Active Groups (Lifestyle, SG, SH)
                 groupsOrder.forEach(gName => {
-                  const gRows = filteredData.filter(r => (outletGroups[r.Outlet] || []).includes(gName));
+                  const gRows = activeData.filter(r => (outletGroups[r.Outlet] || []).includes(gName));
                   if (gRows.length > 0) {
-                    elements.push(renderRowsForGroup(gName, gRows));
+                    elements.push(renderRowsForGroup(gName, gRows, false));
                     gRows.forEach(r => rowsRendered.add(r.Outlet));
                   }
                 });
 
-                const otherRows = filteredData.filter(r => !rowsRendered.has(r.Outlet));
-                if (otherRows.length > 0) {
-                  elements.push(renderRowsForGroup('OTHERS', otherRows));
+                // 2. Render Active LAIN-LAIN
+                const otherActiveRows = activeData.filter(r => !rowsRendered.has(r.Outlet));
+                if (otherActiveRows.length > 0) {
+                  elements.push(renderRowsForGroup('LAIN-LAIN', otherActiveRows, false));
+                }
+                
+                // 3. Render Inactive (TIDAK AKTIF / TIDAK MASUK) at the very bottom
+                if (inactiveData.length > 0) {
+                  elements.push(renderRowsForGroup('TIDAK AKTIF', inactiveData, true));
                 }
 
                 return elements;

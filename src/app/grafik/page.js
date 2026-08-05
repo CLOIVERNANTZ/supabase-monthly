@@ -58,11 +58,16 @@ export default function GrafikPage() {
     if (!targetYear) return;
     setLoading(true);
     try {
-      // 1. Fetch unique outlets first from the view
-      const { data: outletsData, error: outletsError } = await supabase.from('a_utilities_outlets').select('outlet_code');
+      // 1. Fetch unique outlets from master for sorting and toggles
+      const { data: outletsData, error: outletsError } = await supabase.from('a_master_outlet')
+        .select('outlet_code, yang_masuk, order_index')
+        .order('yang_masuk', { ascending: false }) // true comes first
+        .order('order_index', { ascending: true })
+        .order('outlet_code', { ascending: true });
+        
       if (outletsError) throw outletsError;
       
-      let uniqueOutlets = outletsData ? outletsData.map(d => d.outlet_code).sort() : [];
+      let uniqueOutlets = outletsData || [];
       setOutlets(uniqueOutlets);
       
       let currentSelection = selectedOutlets;
@@ -185,16 +190,18 @@ export default function GrafikPage() {
                 </div>
                 <div className="max-h-60 overflow-y-auto p-1">
                   {outlets
-                    .filter(r => r.toLowerCase().includes(outletSearch.toLowerCase()))
+                    .filter(r => r.outlet_code.toLowerCase().includes(outletSearch.toLowerCase()))
                     .sort((a, b) => {
-                      const aSel = selectedOutlets.includes(a);
-                      const bSel = selectedOutlets.includes(b);
+                      const aSel = selectedOutlets.includes(a.outlet_code);
+                      const bSel = selectedOutlets.includes(b.outlet_code);
                       if (aSel && !bSel) return -1;
                       if (!aSel && bSel) return 1;
-                      return a.localeCompare(b);
+                      return 0; // retain original order (yang_masuk, order_index)
                     })
-                    .map((outlet, i) => {
+                    .map((outletObj, i) => {
+                    const outlet = outletObj.outlet_code;
                     const isSelected = selectedOutlets.includes(outlet);
+                    const isYangMasuk = outletObj.yang_masuk !== false; // default true if null
                     return (
                       <div 
                         key={i}
@@ -202,12 +209,14 @@ export default function GrafikPage() {
                           if (isSelected) setSelectedOutlets(selectedOutlets.filter(o => o !== outlet));
                           else setSelectedOutlets([...selectedOutlets, outlet]);
                         }}
-                        className="flex items-center px-3 py-2 hover:bg-slate-50 cursor-pointer rounded text-sm"
+                        className={`flex items-center px-3 py-2 cursor-pointer rounded text-sm transition-colors
+                          ${!isYangMasuk ? 'opacity-50 grayscale bg-slate-50 hover:bg-slate-100' : 'hover:bg-blue-50'}
+                        `}
                       >
-                        <div className={`w-4 h-4 rounded border mr-3 flex items-center justify-center ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
+                        <div className={`w-4 h-4 rounded border mr-3 flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
                           {isSelected && <Check className="w-3 h-3 text-white" />}
                         </div>
-                        <span className={isSelected ? 'font-bold text-slate-800' : 'text-slate-600'}>{outlet}</span>
+                        <span className={isSelected ? 'font-bold text-slate-800' : (isYangMasuk ? 'text-slate-700' : 'text-slate-500 italic')}>{outlet}</span>
                       </div>
                     )
                   })}

@@ -20,6 +20,11 @@ export default function MasterData() {
   const [modalType, setModalType] = useState(''); // 'outlet', 'coa'
   const [formData, setFormData] = useState({});
 
+  // Drag and Drop states
+  const [draggedIndex, setDraggedIndex] = useState(null);
+  const [dropTargetIndex, setDropTargetIndex] = useState(null);
+  const [editOrderIndex, setEditOrderIndex] = useState({});
+
   useEffect(() => {
     fetchData();
   }, [activeTab]);
@@ -28,7 +33,9 @@ export default function MasterData() {
     setLoading(true);
     try {
       if (activeTab === 'outlet') {
-        const { data } = await supabase.from('a_master_outlet').select('*').order('outlet_code');
+        const { data } = await supabase.from('a_master_outlet').select('*')
+          .order('order_index', { ascending: true })
+          .order('outlet_code', { ascending: true });
         setOutlets(data || []);
       } else if (activeTab === 'coa') {
         const { data } = await supabase.from('a_master_coa').select('*').order('category');
@@ -72,6 +79,101 @@ export default function MasterData() {
       showMsg('Berhasil mengupdate grouping.');
     } catch (err) {
       showMsg(err.message, 'error');
+    }
+  };
+
+  const handleToggleYangMasuk = async (outletId, currentValue) => {
+    try {
+      const newValue = !currentValue;
+      const { error } = await supabase
+        .from('a_master_outlet')
+        .update({ yang_masuk: newValue })
+        .eq('id', outletId);
+      if (error) throw error;
+      setOutlets(outlets.map(o => o.id === outletId ? { ...o, yang_masuk: newValue } : o));
+      showMsg('Status YANG MASUK berhasil diupdate.');
+    } catch (err) {
+      showMsg(err.message, 'error');
+    }
+  };
+
+  // Drag and Drop Handlers
+  const handleDragStart = (e, index) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault(); // Necessary to allow dropping
+    e.dataTransfer.dropEffect = "move";
+    if (dropTargetIndex !== index) {
+      setDropTargetIndex(index);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDropTargetIndex(null);
+  };
+
+  const handleDrop = async (e, index) => {
+    e.preventDefault();
+    setDropTargetIndex(null);
+
+    if (draggedIndex === null || draggedIndex === index) return;
+
+    setLoading(true); // Blokir UI sementara menyimpan (agar ada waktu tunggu)
+
+    const newOutlets = [...outlets];
+    const draggedItem = newOutlets.splice(draggedIndex, 1)[0];
+    newOutlets.splice(index, 0, draggedItem);
+
+    setOutlets(newOutlets);
+    setDraggedIndex(null);
+
+    // Save new order to database
+    try {
+      // Bulk update using an upsert or individual updates. Since lists are small, looping updates is fine or we can do a Promise.all
+      const updates = newOutlets.map((out, idx) => ({
+        id: out.id,
+        outlet_code: out.outlet_code,
+        outlet_name: out.outlet_name,
+        order_index: idx
+      }));
+      
+      const { error } = await supabase.from('a_master_outlet').upsert(updates, { onConflict: 'id' });
+      if (error) throw error;
+      showMsg('Urutan berhasil disimpan!');
+    } catch (err) {
+      showMsg('Gagal menyimpan urutan: ' + err.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleManualReorder = async (fromIndex, toIndexRaw) => {
+    let toIndex = toIndexRaw;
+    if (toIndex < 0) toIndex = 0;
+    if (toIndex >= outlets.length) toIndex = outlets.length - 1;
+    if (fromIndex === toIndex) return;
+
+    setLoading(true);
+    const newOutlets = [...outlets];
+    const item = newOutlets.splice(fromIndex, 1)[0];
+    newOutlets.splice(toIndex, 0, item);
+    
+    setOutlets(newOutlets);
+    
+    try {
+      const updates = newOutlets.map((out, idx) => ({
+        id: out.id, outlet_code: out.outlet_code, outlet_name: out.outlet_name, order_index: idx
+      }));
+      const { error } = await supabase.from('a_master_outlet').upsert(updates, { onConflict: 'id' });
+      if (error) throw error;
+      showMsg('Urutan berhasil diperbarui!');
+    } catch (err) {
+      showMsg('Gagal menyimpan urutan: ' + err.message, 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -293,20 +395,61 @@ export default function MasterData() {
                       <th className="px-4 py-3 text-left font-medium text-slate-500">PT</th>
                       <th className="px-4 py-3 text-left font-medium text-slate-500">Brand</th>
                       <th className="px-4 py-3 text-left font-medium text-slate-500">Nama DB 2</th>
+                      <th className="px-4 py-3 text-center font-medium text-slate-500 bg-amber-50">YANG MASUK</th>
                       <th className="px-4 py-3 text-center font-medium text-slate-500">SH</th>
                       <th className="px-4 py-3 text-center font-medium text-slate-500">SG</th>
                       <th className="px-4 py-3 text-center font-medium text-slate-500">LIFESTYLE</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {outlets.map(out => {
+                    {outlets.map((out, index) => {
                       const cgroups = Array.isArray(out.custom_groups) ? out.custom_groups : [];
+                      const isDragged = draggedIndex === index;
+                      const isDropTarget = dropTargetIndex === index;
+                      
                       return (
-                        <tr key={out.id} className="hover:bg-slate-50">
-                          <td className="px-4 py-3 font-medium text-slate-800">{out.outlet_code}</td>
-                          <td className="px-4 py-3 text-slate-600">{out.outlet_name}</td>
-                          <td className="px-4 py-3 text-slate-600">{out.pt_name || '-'}</td>
-                          <td className="px-4 py-3 text-slate-600">{out.brand_name || '-'}</td>
+                        <tr 
+                          key={out.id} 
+                          className={`hover:bg-slate-50 cursor-move transition-colors
+                            ${isDragged ? 'opacity-50 bg-blue-50' : ''} 
+                            ${isDropTarget ? 'border-t-2 border-blue-500 bg-blue-50/50' : ''}
+                            ${out.yang_masuk === false ? 'text-slate-400' : 'text-slate-800'}
+                          `}
+                          draggable="true"
+                          onDragStart={(e) => handleDragStart(e, index)}
+                          onDragOver={(e) => handleDragOver(e, index)}
+                          onDragLeave={handleDragLeave}
+                          onDrop={(e) => handleDrop(e, index)}
+                          title="Geser (Drag) untuk mengubah urutan"
+                        >
+                          <td className="px-4 py-3 font-medium">
+                            <div className="flex items-center gap-2">
+                              <div className="text-slate-300 cursor-grab text-xs">↕</div>
+                              <input 
+                                type="number" 
+                                className="w-12 px-1 py-1 text-[11px] font-bold border border-slate-200 rounded text-center focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50"
+                                value={editOrderIndex[out.id] !== undefined ? editOrderIndex[out.id] : index + 1}
+                                onChange={(e) => setEditOrderIndex({ ...editOrderIndex, [out.id]: e.target.value })}
+                                onBlur={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  if (!isNaN(val) && val !== index + 1) {
+                                    handleManualReorder(index, val - 1);
+                                  }
+                                  const newEdit = {...editOrderIndex};
+                                  delete newEdit[out.id];
+                                  setEditOrderIndex(newEdit);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') e.target.blur();
+                                }}
+                                title="Ketik angka urutan lalu tekan Enter"
+                              />
+                              <span className="ml-1">{out.outlet_code}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">{out.outlet_name}</td>
+                          <td className="px-4 py-3">{out.pt_name || '-'}</td>
+                          <td className="px-4 py-3">{out.brand_name || '-'}</td>
                           <td className="px-4 py-3">
                             <input
                               type="text"
@@ -319,6 +462,14 @@ export default function MasterData() {
                               className="w-24 lg:w-32 px-2 py-1 text-xs border border-slate-200 rounded focus:border-blue-400 focus:outline-none bg-slate-50 hover:bg-white"
                               placeholder="= Kode"
                             />
+                          </td>
+                          <td className="px-4 py-3 text-center bg-amber-50/30">
+                            <button 
+                              onClick={() => handleToggleYangMasuk(out.id, out.yang_masuk !== false)}
+                              className={`w-10 h-5 rounded-full flex items-center transition-colors mx-auto p-0.5 ${out.yang_masuk !== false ? 'bg-green-500 justify-end' : 'bg-slate-300 justify-start'}`}
+                            >
+                              <div className="w-4 h-4 bg-white rounded-full shadow-sm"></div>
+                            </button>
                           </td>
                           {['SH', 'SG', 'LIFESTYLE'].map(grp => (
                             <td key={grp} className="px-4 py-3 text-center">

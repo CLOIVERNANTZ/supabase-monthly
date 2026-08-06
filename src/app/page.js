@@ -64,8 +64,9 @@ export default function Dashboard() {
       if (targetError) throw targetError;
       
       let compareDataList = [];
+      let formattedCompare = null;
       if (compareMonth) {
-        const formattedCompare = `${compareMonth}-01`;
+        formattedCompare = `${compareMonth}-01`;
         const { data: rawCompareData, error: compareError } = await supabase.from('a_utilities_raw').select('*').eq('upload_month', formattedCompare).limit(50000);
         if (compareError) throw compareError;
         compareDataList = rawCompareData || [];
@@ -91,11 +92,20 @@ export default function Dashboard() {
         setBlankSet(bSet);
       }
 
-      const { data: notesData } = await supabase.from('a_utilities_notes').select('*').eq('upload_month', formattedTarget);
+      const monthsToFetch = formattedCompare ? [formattedTarget, formattedCompare] : [formattedTarget];
+      const { data: notesData } = await supabase.from('a_utilities_notes').select('*').in('upload_month', monthsToFetch);
+      const nMap = {};
       if (notesData) {
-        const nMap = {};
         notesData.forEach(n => {
-          nMap[`${n.outlet_code}-${n.category}`] = { note: n.note, color: n.color };
+          const key = `${n.outlet_code}-${n.category}`;
+          if (!nMap[key]) nMap[key] = {};
+          if (n.upload_month === formattedTarget) {
+            nMap[key].note = n.note;
+            nMap[key].color = n.color;
+            nMap[key].manual_amount = n.manual_amount;
+          } else if (n.upload_month === formattedCompare) {
+            nMap[key].prev_manual_amount = n.manual_amount;
+          }
         });
         setNotesMap(nMap);
       }
@@ -119,7 +129,7 @@ export default function Dashboard() {
         setOutletGroups(outletMap);
       }
       
-      processData(rawTargetData || [], compareDataList, orderMap, statusMap);
+      processData(rawTargetData || [], compareDataList, orderMap, statusMap, nMap);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -130,7 +140,7 @@ export default function Dashboard() {
   const allCategories = ['Listrik', 'PAM', 'Gas', 'FCU (WATER CHILLER)', 'Telp', 'Internet'];
   const categories = filterCategory ? [filterCategory] : allCategories;
 
-  const processData = (targetData, compareDataList, orderMap = {}, statusMap = {}) => {
+  const processData = (targetData, compareDataList, orderMap = {}, statusMap = {}, currentNotesMap = {}) => {
     const rawOutlets = [...new Set([...targetData.map(d => d.outlet_code), ...compareDataList.map(d => d.outlet_code)])];
     
     // Sort outlets based on order_index
@@ -144,9 +154,17 @@ export default function Dashboard() {
     const processed = outlets.map(outlet => {
       const row = { Outlet: outlet, yang_masuk: statusMap[outlet] !== false };
       categories.forEach(cat => {
-        const tAmt = targetData.filter(d => d.outlet_code === outlet && d.category === cat).reduce((sum, d) => sum + d.debit_amount - d.credit_amount, 0);
-        const cAmt = compareDataList.filter(d => d.outlet_code === outlet && d.category === cat).reduce((sum, d) => sum + d.debit_amount - d.credit_amount, 0);
+        let tAmt = targetData.filter(d => d.outlet_code === outlet && d.category === cat).reduce((sum, d) => sum + d.debit_amount - d.credit_amount, 0);
+        let cAmt = compareDataList.filter(d => d.outlet_code === outlet && d.category === cat).reduce((sum, d) => sum + d.debit_amount - d.credit_amount, 0);
           
+        const noteInfo = currentNotesMap[`${outlet}-${cat}`] || {};
+        if (noteInfo.manual_amount !== undefined && noteInfo.manual_amount !== null) {
+          tAmt = Number(noteInfo.manual_amount);
+        }
+        if (noteInfo.prev_manual_amount !== undefined && noteInfo.prev_manual_amount !== null) {
+          cAmt = Number(noteInfo.prev_manual_amount);
+        }
+
         row[cat] = tAmt;
         if (compareMonth) {
           row[`${cat}_prev`] = cAmt;
@@ -404,21 +422,23 @@ export default function Dashboard() {
       category,
       selectedColor: existing?.color || null,
       noteText: existing?.note || '',
+      manualAmount: existing?.manual_amount || '',
       show: true
     });
   };
 
   const handleSaveNoteAndColor = async () => {
-    const { outlet, category, selectedColor, noteText } = cellMenu;
+    const { outlet, category, selectedColor, noteText, manualAmount } = cellMenu;
     const formattedTarget = `${targetMonth}-01`;
     try {
       const existing = notesMap[`${outlet}-${category}`];
       const finalColor = selectedColor;
       const finalNote = noteText;
+      const finalAmt = manualAmount === '' ? null : Number(manualAmount);
       
       if (existing) {
         await supabase.from('a_utilities_notes')
-          .update({ color: finalColor, note: finalNote })
+          .update({ color: finalColor, note: finalNote, manual_amount: finalAmt })
           .eq('upload_month', formattedTarget)
           .eq('outlet_code', outlet)
           .eq('category', category);
@@ -429,18 +449,23 @@ export default function Dashboard() {
             outlet_code: outlet,
             category: category,
             note: finalNote,
-            color: finalColor
+            color: finalColor,
+            manual_amount: finalAmt
           });
       }
       
-      setNotesMap(prev => ({
-        ...prev,
-        [`${outlet}-${category}`]: { note: finalNote, color: finalColor }
-      }));
+      const newMap = {
+        ...notesMap,
+        [`${outlet}-${category}`]: { ...existing, note: finalNote, color: finalColor, manual_amount: finalAmt }
+      };
+      setNotesMap(newMap);
       setCellMenu({...cellMenu, show: false});
+      // Re-process data directly without full refetch so UI updates instantly
+      // But we need the raw data... the easiest way is to call fetchData() again
+      fetchData();
     } catch (e) {
       console.error(e);
-      alert('Gagal menyimpan catatan & warna');
+      alert('Gagal menyimpan perubahan');
     }
   };
 
@@ -757,85 +782,80 @@ export default function Dashboard() {
         <>
           <div className="fixed inset-0 z-[90]" onClick={(e) => { e.stopPropagation(); setCellMenu({...cellMenu, show: false}); }}></div>
           <div 
-            className="absolute z-[100] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden w-40 text-[10px]"
+            className="absolute z-[100] bg-white rounded-xl shadow-2xl border border-slate-200 p-4 min-w-[280px]"
             style={{ top: cellMenu.y, left: cellMenu.x }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-2 py-1.5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+            <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex justify-between items-center -mx-4 -mt-4 mb-3 rounded-t-xl">
                <div>
                  <span className="font-bold text-slate-700">{cellMenu.outlet}</span> - <span className="text-blue-600 font-medium">{cellMenu.category}</span>
                </div>
-               <button onClick={() => setCellMenu({...cellMenu, show: false})} className="text-slate-400 hover:text-slate-700"><X className="w-3 h-3"/></button>
+               <button onClick={() => setCellMenu({...cellMenu, show: false})} className="text-slate-400 hover:text-red-500"><X className="w-4 h-4"/></button>
             </div>
-            <div className="p-2 border-b border-slate-100 bg-white space-y-2">
-              <div>
-                <label className="font-bold text-slate-500 mb-0.5 block">Warna:</label>
-                <div className="flex gap-1.5 justify-center">
-                  {['red', 'yellow', 'blue', 'transparent'].map(c => (
-                    <button 
-                      key={c}
-                      onClick={() => setCellMenu(prev => ({...prev, selectedColor: c === 'transparent' ? null : c}))}
-                      className={`w-4 h-4 rounded-sm border shadow-sm transition-all ${cellMenu.selectedColor === c || (c === 'transparent' && !cellMenu.selectedColor) ? 'ring-2 ring-blue-500 scale-110' : ''} ${c === 'red' ? 'bg-red-200 border-red-300' : c === 'yellow' ? 'bg-yellow-200 border-yellow-300' : c === 'blue' ? 'bg-blue-200 border-blue-300' : 'bg-white border-slate-300'}`}
-                      title={c === 'transparent' ? 'Hapus Warna' : `Warna ${c}`}
-                    >
-                      {c === 'transparent' && <X className="w-3 h-3 text-slate-300 mx-auto" />}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              
-              <div>
-                <label className="font-bold text-slate-500 mb-0.5 block">Catatan:</label>
-                <textarea 
-                  value={cellMenu.noteText}
-                  onChange={(e) => setCellMenu(prev => ({...prev, noteText: e.target.value}))}
-                  className="w-full p-1.5 border border-slate-200 rounded-sm outline-none focus:border-blue-500 h-10 resize-none leading-tight"
-                  placeholder="Ketik catatan..."
+            
+            <div className="flex gap-2 mb-3">
+              <div className="flex-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Angka Manual</label>
+                <input 
+                  type="number"
+                  value={cellMenu.manualAmount}
+                  onChange={e => setCellMenu({...cellMenu, manualAmount: e.target.value})}
+                  placeholder="Isi jika ada..."
+                  className="w-full text-sm border border-slate-300 rounded px-2 py-1.5 focus:outline-none focus:border-blue-500"
                 />
               </div>
-              
-              <button 
-                onClick={handleSaveNoteAndColor}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-1 rounded-sm shadow-sm transition-colors"
-              >
-                Simpan
+              <div className="flex-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Keterangan</label>
+                <input 
+                  type="text" 
+                  value={cellMenu.noteText}
+                  onChange={e => setCellMenu({...cellMenu, noteText: e.target.value})}
+                  placeholder="Catatan..."
+                  className="w-full text-sm border border-slate-300 rounded px-2 py-1.5 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+            
+            <div className="mb-4">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Tandai Warna</label>
+              <div className="flex gap-2">
+                {['red', 'yellow', 'blue', 'transparent'].map(c => (
+                  <button 
+                    key={c}
+                    onClick={() => setCellMenu(prev => ({...prev, selectedColor: c === 'transparent' ? null : c}))}
+                    className={`w-6 h-6 rounded-md border shadow-sm transition-all ${cellMenu.selectedColor === c || (c === 'transparent' && !cellMenu.selectedColor) ? 'ring-2 ring-blue-500 scale-110' : ''} ${c === 'red' ? 'bg-red-200 border-red-300' : c === 'yellow' ? 'bg-yellow-200 border-yellow-300' : c === 'blue' ? 'bg-blue-200 border-blue-300' : 'bg-white border-slate-300'}`}
+                    title={c === 'transparent' ? 'Hapus Warna' : `Warna ${c}`}
+                  >
+                    {c === 'transparent' && <X className="w-4 h-4 text-slate-300 mx-auto" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            <button 
+              onClick={handleSaveNoteAndColor}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 rounded shadow-sm text-sm mb-3 transition-colors"
+            >
+              Simpan Perubahan
+            </button>
+            
+            <div className="flex flex-col bg-slate-50 gap-0.5 border border-slate-100 rounded-lg overflow-hidden">
+              <button onClick={() => { setCellMenu({...cellMenu, show: false}); fetchDrilldownData(cellMenu.outlet, cellMenu.category); }} className="w-full text-left px-3 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium text-xs transition-colors flex items-center gap-2">
+                <List className="w-3.5 h-3.5 text-slate-400" /> Drilldown
+              </button>
+              <button onClick={() => router.push(`/mplus1?outlet=${cellMenu.outlet}&category=${cellMenu.category}&year=${targetMonth ? targetMonth.split('-')[0] : new Date().getFullYear()}`)} className="w-full text-left px-3 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium text-xs transition-colors flex items-center gap-2">
+                <TrendingUp className="w-3.5 h-3.5 text-pink-400" /> M+1 Accrued
+              </button>
+              <button onClick={() => router.push(`/raw?outlet=${cellMenu.outlet}&category=${cellMenu.category}&period=${targetMonth}-01`)} className="w-full text-left px-3 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium text-xs transition-colors flex items-center gap-2">
+                <Search className="w-3.5 h-3.5 text-slate-400" /> Raw Data
+              </button>
+              <button onClick={() => router.push(`/analisa?outlet=${cellMenu.outlet}&month=${targetMonth}`)} className="w-full text-left px-3 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium text-xs transition-colors flex items-center gap-2">
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400" /> Analisa
+              </button>
+              <button onClick={() => router.push(`/grafik?outlet=${cellMenu.outlet}&category=${cellMenu.category}&year=${targetMonth ? targetMonth.split('-')[0] : new Date().getFullYear()}`)} className="w-full text-left px-3 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium text-xs transition-colors flex items-center gap-2">
+                <BarChart2 className="w-3.5 h-3.5 text-slate-400" /> Grafik
               </button>
             </div>
-            <div className="p-1 flex flex-col bg-slate-50 gap-0.5">
-            <button 
-              onClick={() => {
-                setCellMenu({...cellMenu, show: false});
-                fetchDrilldownData(cellMenu.outlet, cellMenu.category);
-              }} 
-              className="w-full text-left px-2 py-1.5 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors flex items-center gap-1.5 rounded-sm"
-            >
-              <List className="w-3 h-3 text-slate-400" /> Drilldown
-            </button>
-            <button 
-              onClick={() => router.push(`/mplus1?outlet=${cellMenu.outlet}&category=${cellMenu.category}&year=${targetMonth ? targetMonth.split('-')[0] : new Date().getFullYear()}`)} 
-              className="w-full text-left px-2 py-1.5 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors flex items-center gap-1.5 rounded-sm"
-            >
-              <TrendingUp className="w-3 h-3 text-pink-400" /> M+1 Accrued
-            </button>
-            <button 
-              onClick={() => router.push(`/raw?outlet=${cellMenu.outlet}&category=${cellMenu.category}&period=${targetMonth}-01`)} 
-              className="w-full text-left px-2 py-1.5 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors flex items-center gap-1.5 rounded-sm"
-            >
-              <Search className="w-3 h-3 text-slate-400" /> Raw Data
-            </button>
-            <button 
-              onClick={() => router.push(`/analisa?outlet=${cellMenu.outlet}&month=${targetMonth}`)} 
-              className="w-full text-left px-2 py-1.5 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors flex items-center gap-1.5 rounded-sm"
-            >
-              <ExternalLink className="w-3 h-3 text-slate-400" /> Analisa
-            </button>
-            <button 
-              onClick={() => router.push(`/grafik?outlet=${cellMenu.outlet}&category=${cellMenu.category}&year=${targetMonth ? targetMonth.split('-')[0] : new Date().getFullYear()}`)} 
-              className="w-full text-left px-2 py-1.5 text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors flex items-center gap-1.5 rounded-sm"
-            >
-              <BarChart2 className="w-3 h-3 text-slate-400" /> Grafik
-            </button>
-          </div>
           </div>
         </>
       )}

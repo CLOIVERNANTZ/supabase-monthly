@@ -122,6 +122,7 @@ export default function AnalisaPage() {
   const isAlert = (diff, prevAmt) => {
     if (diff > 1000000) return true;
     if (prevAmt > 0 && (diff / prevAmt) > 0.10) return true;
+    if (prevAmt > 0 && (diff / prevAmt) < -0.25) return true; // Turun drastis > 25%
     return false;
   };
 
@@ -181,24 +182,51 @@ export default function AnalisaPage() {
         const diff = row[`${cat}_diff`] || 0;
         const prev = row[`${cat}_prev`] || 0;
         const current = row[cat] || 0;
-        if (diff > 0 && isAlert(diff, prev)) {
-          list.push({ outlet: row.Outlet, category: cat, current, prev, diff, pct: prev > 0 ? (diff / prev) * 100 : 100 });
+        if (isAlert(diff, prev)) {
+          list.push({ outlet: row.Outlet, category: cat, current, prev, diff, pct: prev > 0 ? (diff / prev) * 100 : (diff > 0 ? 100 : 0) });
         }
       });
     });
     return list;
   }, [data]);
   
+  const groupedAnomalies = useMemo(() => {
+    const groups = {};
+    anomalies.forEach(a => {
+      if (!groups[a.outlet]) groups[a.outlet] = [];
+      groups[a.outlet].push(a);
+    });
+    return Object.entries(groups).map(([outlet, items]) => ({ outlet, items }));
+  }, [anomalies]);
+  
   const exportAnalisa = () => {
-    const exportData = anomalies.map(a => ({
-      'Outlet': a.outlet,
-      'Kategori': a.category,
-      'Bulan Ini': a.current,
-      'Bulan Lalu': a.prev,
-      'Kenaikan': a.diff,
-      'Persentase': a.pct.toFixed(2) + '%',
-      'Catatan': notes[`${a.outlet}_${a.category}`] || ''
-    }));
+    const exportData = groupedAnomalies.map(group => {
+      const naikItems = group.items.filter(item => item.diff > 0);
+      if (naikItems.length === 0) return null;
+      
+      const detailString = naikItems.map(item => 
+        `${item.category} NAIK ${item.pct.toFixed(0)}% Rp ${item.diff.toLocaleString('id-ID')}`
+      ).join(', ');
+
+      // Kumpulkan semua catatan untuk outlet ini (Summary + per Kategori)
+      let combinedNotes = notes[`${group.outlet}_SUMMARY`] || '';
+      const catNotes = [];
+      categories.forEach(cat => {
+        if (notes[`${group.outlet}_${cat}`]) {
+          catNotes.push(`${cat}: ${notes[`${group.outlet}_${cat}`]}`);
+        }
+      });
+      if (catNotes.length > 0) {
+        combinedNotes += (combinedNotes ? ', ' : '') + catNotes.join(', ');
+      }
+
+      return {
+        'Outlet': group.outlet,
+        'Keterangan Kenaikan': detailString,
+        'Catatan': combinedNotes
+      };
+    }).filter(Boolean);
+
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Analisis Kenaikan');
@@ -265,31 +293,44 @@ export default function AnalisaPage() {
         </div>
       ) : analisaView === 'list' ? (
         <div className="grid grid-cols-1 gap-3">
-          {anomalies.map((item, i) => (
-            <div key={i} className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="flex-1 cursor-pointer hover:bg-slate-50 p-2 -m-2 rounded transition-colors" onClick={() => handleAnomalyClick(item.outlet, item.category)}>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-black text-slate-800 uppercase tracking-wider">{item.outlet}</span>
-                  <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-bold rounded">{item.category}</span>
+          {groupedAnomalies.map((group, i) => (
+            <div key={i} className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="font-black text-slate-800 uppercase tracking-wider">{group.outlet}</span>
                 </div>
-                <p className="text-sm text-slate-600">
-                  Naik <span className="font-bold text-red-600">Rp {item.diff.toLocaleString('id-ID')} ({item.pct.toFixed(1)}%)</span> dari Rp {item.prev.toLocaleString('id-ID')} menjadi Rp {item.current.toLocaleString('id-ID')}.
-                </p>
+                <div className="flex flex-col gap-2">
+                  {group.items.map(item => (
+                    <div 
+                      key={item.category} 
+                      className="bg-slate-50 p-2 rounded-lg border border-slate-100 flex items-center justify-between cursor-pointer hover:bg-slate-100 transition-colors"
+                      onClick={() => handleAnomalyClick(item.outlet, item.category)}
+                      title="Klik untuk melihat detail per transaksi"
+                    >
+                      <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-bold rounded mr-2">{item.category}</span>
+                      <span className="text-sm text-slate-600 flex-1">
+                        {item.diff > 0 ? 'Naik' : 'Turun'} <span className={`font-bold ${item.diff > 0 ? 'text-red-600' : 'text-emerald-600'}`}>Rp {Math.abs(item.diff).toLocaleString('id-ID')} ({Math.abs(item.pct).toFixed(1)}%)</span> dari Rp {item.prev.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
               <div className="w-full md:w-1/3 group">
                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Catatan Analisis</label>
-                {editingNote?.outlet === item.outlet && editingNote?.category === item.category ? (
-                  <div className="flex gap-2">
-                    <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => e.key === 'Enter' && saveNote()} placeholder="Ketik alasan kenaikan..." className="flex-1 px-3 py-1.5 text-sm border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-100"/>
-                    <button onClick={saveNote} disabled={savingNote} className="px-3 py-1.5 bg-blue-600 text-white rounded font-medium text-sm hover:bg-blue-700"><Check className="w-4 h-4"/></button>
-                    <button onClick={() => setEditingNote(null)} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded font-medium text-sm hover:bg-slate-200"><X className="w-4 h-4"/></button>
+                {editingNote?.outlet === group.outlet && editingNote?.category === 'SUMMARY' ? (
+                  <div className="flex gap-2 h-24">
+                    <textarea autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveNote(); } }} placeholder="Ketik alasan anomali outlet ini..." className="flex-1 px-3 py-2 text-sm border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-100 resize-none"></textarea>
+                    <div className="flex flex-col gap-1">
+                      <button onClick={saveNote} disabled={savingNote} className="px-3 py-2 bg-blue-600 text-white rounded font-medium text-sm hover:bg-blue-700 h-10"><Check className="w-4 h-4"/></button>
+                      <button onClick={() => setEditingNote(null)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded font-medium text-sm hover:bg-slate-200 h-10"><X className="w-4 h-4"/></button>
+                    </div>
                   </div>
-                ) : notes[`${item.outlet}_${item.category}`] ? (
-                  <div onClick={() => setEditingNote({outlet: item.outlet, category: item.category, text: notes[`${item.outlet}_${item.category}`]})} className="p-2 bg-yellow-50 text-yellow-800 text-sm rounded border border-yellow-200 cursor-pointer hover:bg-yellow-100">
-                    {notes[`${item.outlet}_${item.category}`]}
+                ) : notes[`${group.outlet}_SUMMARY`] ? (
+                  <div onClick={() => setEditingNote({outlet: group.outlet, category: 'SUMMARY', text: notes[`${group.outlet}_SUMMARY`]})} className="p-3 bg-yellow-50 text-yellow-800 text-sm rounded-lg border border-yellow-200 cursor-pointer hover:bg-yellow-100 whitespace-pre-wrap h-full min-h-[6rem]">
+                    {notes[`${group.outlet}_SUMMARY`]}
                   </div>
                 ) : (
-                  <div onClick={() => setEditingNote({outlet: item.outlet, category: item.category, text: ''})} className="p-2 border border-dashed border-slate-300 text-slate-400 text-sm rounded cursor-pointer hover:bg-slate-50 hover:text-blue-500 opacity-50 group-hover:opacity-100 transition-opacity flex items-center gap-2">
+                  <div onClick={() => setEditingNote({outlet: group.outlet, category: 'SUMMARY', text: ''})} className="p-3 border border-dashed border-slate-300 text-slate-400 text-sm rounded-lg cursor-pointer hover:bg-slate-50 hover:text-blue-500 opacity-50 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 h-full min-h-[6rem]">
                     <MessageSquare className="w-4 h-4"/> Tambah Catatan
                   </div>
                 )}
@@ -312,23 +353,27 @@ export default function AnalisaPage() {
               </div>
               <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {items.map((item, i) => (
-                  <div key={i} className="flex flex-col gap-2 p-4 bg-red-50/30 rounded-lg border border-red-100 relative">
-                    <div className="flex justify-between items-start cursor-pointer hover:bg-red-50/50 p-1 -m-1 rounded transition-colors" onClick={() => handleAnomalyClick(item.outlet, item.category)}>
+                  <div key={i} className={`flex flex-col gap-2 p-4 rounded-lg border relative ${item.diff > 0 ? 'bg-red-50/30 border-red-100' : 'bg-emerald-50/30 border-emerald-100'}`}>
+                    <div className={`flex justify-between items-start cursor-pointer p-1 -m-1 rounded transition-colors ${item.diff > 0 ? 'hover:bg-red-50/50' : 'hover:bg-emerald-50/50'}`} onClick={() => handleAnomalyClick(item.outlet, item.category)}>
                       <div>
                         <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-bold rounded uppercase tracking-wider">{item.category}</span>
                         <div className="mt-2 text-sm text-slate-600">Bulan Ini: <span className="font-bold text-slate-800">Rp {item.current.toLocaleString('id-ID')}</span></div>
                         <div className="text-xs text-slate-500">Bulan Lalu: Rp {item.prev.toLocaleString('id-ID')}</div>
                       </div>
                       <div className="text-right">
-                        <div className="font-black text-red-600">▲ Rp {item.diff.toLocaleString('id-ID')}</div>
-                        <div className="text-xs font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded inline-block mt-1">+{item.pct.toFixed(1)}%</div>
+                        <div className={`font-black ${item.diff > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                          {item.diff > 0 ? '▲' : '▼'} Rp {Math.abs(item.diff).toLocaleString('id-ID')}
+                        </div>
+                        <div className={`text-xs font-bold px-1.5 py-0.5 rounded inline-block mt-1 ${item.diff > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {item.diff > 0 ? '+' : '-'}{Math.abs(item.pct).toFixed(1)}%
+                        </div>
                       </div>
                     </div>
                     
-                    <div className="mt-2 pt-2 border-t border-red-100/50 group">
+                    <div className={`mt-2 pt-2 border-t group ${item.diff > 0 ? 'border-red-100/50' : 'border-emerald-100/50'}`}>
                        {editingNote?.outlet === item.outlet && editingNote?.category === item.category ? (
                         <div className="flex gap-2">
-                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => e.key === 'Enter' && saveNote()} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
                           <button onClick={saveNote} disabled={savingNote} className="px-2 bg-blue-600 text-white rounded"><Check className="w-3 h-3"/></button>
                           <button onClick={() => setEditingNote(null)} className="px-2 bg-slate-200 text-slate-600 rounded"><X className="w-3 h-3"/></button>
                         </div>

@@ -10,6 +10,7 @@ const formatCurrency = (amount) => {
 
 export default function CountPage() {
   const [targetMonth, setTargetMonth] = useState('');
+  const [notes, setNotes] = useState({});
   
   useEffect(() => {
     const savedTarget = localStorage.getItem('preferred_target_month');
@@ -31,6 +32,10 @@ export default function CountPage() {
   const [showDrilldown, setShowDrilldown] = useState(false);
   const [drilldownData, setDrilldownData] = useState([]);
   const [drilldownOutlet, setDrilldownOutlet] = useState('');
+  const [drilldownRawOutlet, setDrilldownRawOutlet] = useState('');
+  const [drilldownCategory, setDrilldownCategory] = useState('');
+  const [editingNote, setEditingNote] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
 
   const groupsOrder = ['LIFESTYLE', 'SG', 'SH']; // OTHERS goes last
   const utilityCategories = ['Listrik', 'PAM', 'Gas', 'Telp', 'Internet', 'FCU (WATER CHILLER)'];
@@ -61,6 +66,16 @@ export default function CountPage() {
       const bSet = new Set();
       if (blanksData) blanksData.forEach(b => bSet.add(`${b.outlet_code}-${b.category}`));
       setBlankSet(bSet);
+
+      // Fetch Notes
+      const { data: notesData } = await supabase.from('a_utilities_notes').select('*').eq('upload_month', formattedTarget).like('category', 'COUNT_%');
+      const notesObj = {};
+      if (notesData) {
+        notesData.forEach(n => {
+          notesObj[`${n.outlet_code}_${n.category.replace('COUNT_', '')}`] = n.note;
+        });
+      }
+      setNotes(notesObj);
 
       // Fetch Outlet Custom Groups
       const { data: outletData } = await supabase.from('a_master_outlet').select('outlet_code, custom_groups');
@@ -141,12 +156,38 @@ export default function CountPage() {
     }
   };
 
+  const saveNote = async () => {
+    setSavingNote(true);
+    try {
+      const formattedTarget = `${targetMonth}-01`;
+      const catKey = `COUNT_${drilldownCategory}`;
+      if (!editingNote.trim()) {
+        await supabase.from('a_utilities_notes').delete().match({ outlet_code: drilldownRawOutlet, upload_month: formattedTarget, category: catKey });
+        const newNotes = { ...notes };
+        delete newNotes[`${drilldownRawOutlet}_${drilldownCategory}`];
+        setNotes(newNotes);
+      } else {
+        const { error } = await supabase.from('a_utilities_notes').upsert({
+          outlet_code: drilldownRawOutlet, upload_month: formattedTarget, category: catKey, note: editingNote
+        }, { onConflict: 'outlet_code,upload_month,category' });
+        if (error) throw error;
+        setNotes({ ...notes, [`${drilldownRawOutlet}_${drilldownCategory}`]: editingNote });
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Gagal menyimpan keterangan');
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
   const handleDrilldown = (outlet, category, count, allRows) => {
-    if (count === 0) return; // Don't show modal if count is 0
+    setDrilldownRawOutlet(outlet);
+    setDrilldownCategory(category);
     setDrilldownOutlet(`${outlet} - ${category}`);
-    // Sort rows by date descending
-    const sorted = [...allRows].sort((a, b) => new Date(b.trx_date) - new Date(a.trx_date));
+    const sorted = [...(allRows||[])].sort((a, b) => new Date(b.trx_date) - new Date(a.trx_date));
     setDrilldownData(sorted);
+    setEditingNote(notes[`${outlet}_${category}`] || '');
     setShowDrilldown(true);
   };
 
@@ -188,18 +229,22 @@ export default function CountPage() {
                     if (isBlank) bgClass = "bg-[#92D050] text-black font-bold";
                     else if (isM1) bgClass = "bg-pink-100";
                     
-                    // If count is 0, we show nothing (empty string), unless it's colored
                     return (
-                      <td key={cat} className={`px-4 py-2.5 text-center border-r border-slate-100 last:border-0 ${bgClass}`}>
+                      <td 
+                        key={cat} 
+                        onClick={() => handleDrilldown(row.Outlet, cat, count, allRows)}
+                        className={`px-4 py-2.5 text-center border-r border-slate-100 last:border-0 cursor-pointer relative group ${bgClass}`}
+                        title={notes[`${row.Outlet}_${cat}`] || 'Klik untuk lihat/edit keterangan'}
+                      >
+                        {notes[`${row.Outlet}_${cat}`] && (
+                          <div className="absolute top-1 right-1 w-2 h-2 bg-yellow-400 rounded-full shadow" title="Ada keterangan"></div>
+                        )}
                         {count > 0 ? (
-                          <button 
-                            onClick={() => handleDrilldown(row.Outlet, cat, count, allRows)}
-                            className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-700 font-bold hover:bg-blue-200 hover:scale-110 transition-all cursor-pointer"
-                          >
+                          <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-700 font-bold group-hover:bg-blue-200 group-hover:scale-110 transition-all">
                             {count}
-                          </button>
+                          </div>
                         ) : (
-                          <span className="text-slate-300">-</span>
+                          <span className="text-slate-300 group-hover:text-blue-500 transition-colors">-</span>
                         )}
                       </td>
                     );
@@ -272,9 +317,15 @@ export default function CountPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex gap-2">
+              <input type="text" value={editingNote} onChange={e => setEditingNote(e.target.value)} onKeyDown={e => e.key === 'Enter' && saveNote()} placeholder="Ketik keterangan cell ini (contoh: Belum ditagihkan, Tutup Sementara, dll)..." className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500" />
+              <button onClick={saveNote} disabled={savingNote} className="px-5 py-2 bg-blue-600 text-white rounded-lg font-bold text-sm hover:bg-blue-700 disabled:opacity-50">
+                {savingNote ? 'Menyimpan...' : 'Simpan Keterangan'}
+              </button>
+            </div>
             <div className="p-5 overflow-y-auto">
               {drilldownData.length === 0 ? (
-                <div className="text-center text-slate-500 py-8">Tidak ada data mentah</div>
+                <div className="text-center text-slate-500 py-8">Tidak ada transaksi (0 Count)</div>
               ) : (
                 <div className="overflow-x-auto border border-slate-200 rounded-xl">
                   <table className="w-full text-sm text-left">

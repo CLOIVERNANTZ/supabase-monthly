@@ -67,6 +67,10 @@ export default function GrafikDB2({ selectedOutlets = [], targetYear = '' }) {
       const shortYear = targetYear.slice(-2);
 
       try {
+        if (!supabase2) {
+          throw new Error("Konfigurasi DB2 (NEXT_PUBLIC_SUPABASE_URL_2) tidak ditemukan di environment production.");
+        }
+
         const { data, error: fetchError } = await supabase2
           .from('payments')
           .select('outlet, utility, totalNet, totalInv, tarif, usage, periode, status')

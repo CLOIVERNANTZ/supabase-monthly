@@ -6,6 +6,75 @@ import { Download, Search, Check, ChevronDown, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { formatUIDate } from '@/utils/dateFormatter';
 
+const MultiSelectDropdown = ({ title, options, selected, setSelected, search, setSearch, show, setShow, dropdownRef }) => (
+  <div className="relative" ref={dropdownRef}>
+    <div 
+      onClick={() => setShow(!show)}
+      className="flex justify-between items-center px-3 py-1.5 bg-white border border-slate-300 rounded-lg cursor-pointer hover:border-blue-400 shadow-sm min-w-[160px]"
+    >
+      <span className="text-xs font-bold text-slate-700 truncate mr-2">
+        {selected.length === 0 
+          ? `Semua ${title}` 
+          : selected.length === options.length && options.length > 0 
+            ? `Semua ${title}` 
+            : selected.length === 1 
+              ? (title === 'Periode' ? formatUIDate(selected[0]) : selected[0]) 
+              : `${selected.length} ${title}`}
+      </span>
+      <ChevronDown className="w-3 h-3 text-slate-400" />
+    </div>
+    
+    {show && (
+      <div className="absolute top-full mt-1 left-0 w-64 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden">
+        {setSearch && (
+          <div className="p-2 border-b border-slate-100 bg-slate-50">
+            <div className="relative">
+              <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-400" />
+              <input 
+                type="text" 
+                placeholder="Cari..." 
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-7 pr-3 py-1.5 text-xs rounded border border-slate-200 focus:outline-none focus:border-blue-400"
+              />
+            </div>
+          </div>
+        )}
+        <div className="max-h-60 overflow-y-auto p-1">
+          <div 
+            onClick={() => setSelected(selected.length === options.length ? [] : [...options])}
+            className="flex items-center px-3 py-2 hover:bg-slate-50 cursor-pointer rounded text-xs border-b border-slate-100 mb-1"
+          >
+            <div className={`w-3.5 h-3.5 rounded border mr-2 flex items-center justify-center ${selected.length === options.length ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
+              {selected.length === options.length && <Check className="w-2.5 h-2.5 text-white" />}
+            </div>
+            <span className="font-bold text-slate-700">Pilih Semua</span>
+          </div>
+          
+          {options.filter(o => !search || o.toLowerCase().includes(search.toLowerCase())).map((opt, i) => {
+            const isSelected = selected.includes(opt);
+            return (
+              <div 
+                key={i}
+                onClick={() => {
+                  if (isSelected) setSelected(selected.filter(o => o !== opt));
+                  else setSelected([...selected, opt]);
+                }}
+                className="flex items-center px-3 py-2 hover:bg-slate-50 cursor-pointer rounded text-xs"
+              >
+                <div className={`w-3.5 h-3.5 rounded border mr-2 flex items-center justify-center ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
+                  {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                </div>
+                <span className={isSelected ? 'font-bold text-slate-800' : 'text-slate-700'}>{title === 'Periode' ? formatUIDate(opt) : opt}</span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )}
+  </div>
+);
+
 export default function RawDataPage() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -53,7 +122,10 @@ export default function RawDataPage() {
 
   useEffect(() => {
     if (isInitialized) {
-      fetchData();
+      const timer = setTimeout(() => {
+        fetchData();
+      }, 500);
+      return () => clearTimeout(timer);
     }
   }, [selectedOutlets, selectedCategories, selectedPeriods, isInitialized]);
 
@@ -117,75 +189,6 @@ export default function RawDataPage() {
     XLSX.utils.book_append_sheet(wb, ws, 'Raw Data');
     XLSX.writeFile(wb, `Export_RawData.xlsx`);
   };
-
-  const MultiSelectDropdown = ({ title, options, selected, setSelected, search, setSearch, show, setShow, dropdownRef }) => (
-    <div className="relative" ref={dropdownRef}>
-      <div 
-        onClick={() => setShow(!show)}
-        className="flex justify-between items-center px-3 py-1.5 bg-white border border-slate-300 rounded-lg cursor-pointer hover:border-blue-400 shadow-sm min-w-[160px]"
-      >
-        <span className="text-xs font-bold text-slate-700 truncate mr-2">
-          {selected.length === 0 
-            ? `Semua ${title}` 
-            : selected.length === options.length && options.length > 0 
-              ? `Semua ${title}` 
-              : selected.length === 1 
-                ? (title === 'Periode' ? formatUIDate(selected[0]) : selected[0]) 
-                : `${selected.length} ${title}`}
-        </span>
-        <ChevronDown className="w-3 h-3 text-slate-400" />
-      </div>
-      
-      {show && (
-        <div className="absolute top-full mt-1 left-0 w-64 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden">
-          {setSearch && (
-            <div className="p-2 border-b border-slate-100 bg-slate-50">
-              <div className="relative">
-                <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-400" />
-                <input 
-                  type="text" 
-                  placeholder="Cari..." 
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full pl-7 pr-3 py-1.5 text-xs rounded border border-slate-200 focus:outline-none focus:border-blue-400"
-                />
-              </div>
-            </div>
-          )}
-          <div className="max-h-60 overflow-y-auto p-1">
-            <div 
-              onClick={() => setSelected(selected.length === options.length ? [] : [...options])}
-              className="flex items-center px-3 py-2 hover:bg-slate-50 cursor-pointer rounded text-xs border-b border-slate-100 mb-1"
-            >
-              <div className={`w-3.5 h-3.5 rounded border mr-2 flex items-center justify-center ${selected.length === options.length ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
-                {selected.length === options.length && <Check className="w-2.5 h-2.5 text-white" />}
-              </div>
-              <span className="font-bold text-slate-700">Pilih Semua</span>
-            </div>
-            
-            {options.filter(o => !search || o.toLowerCase().includes(search.toLowerCase())).map((opt, i) => {
-              const isSelected = selected.includes(opt);
-              return (
-                <div 
-                  key={i}
-                  onClick={() => {
-                    if (isSelected) setSelected(selected.filter(o => o !== opt));
-                    else setSelected([...selected, opt]);
-                  }}
-                  className="flex items-center px-3 py-2 hover:bg-slate-50 cursor-pointer rounded text-xs"
-                >
-                  <div className={`w-3.5 h-3.5 rounded border mr-2 flex items-center justify-center ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
-                    {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
-                  </div>
-                  <span className={isSelected ? 'font-bold text-slate-800' : 'text-slate-600'}>{opt}</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
 
   return (
     <div className="space-y-4">

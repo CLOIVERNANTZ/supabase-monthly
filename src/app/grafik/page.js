@@ -31,15 +31,25 @@ export default function GrafikPage() {
       initialYear = savedYear;
     }
     
+    let initialOutlets = [];
     if (typeof window !== 'undefined') {
+      const savedOutlets = localStorage.getItem('preferred_grafik_outlets');
+      if (savedOutlets) {
+        try { initialOutlets = JSON.parse(savedOutlets); } catch(e){}
+      }
+      
       const params = new URLSearchParams(window.location.search);
       if (params.get('year')) {
         initialYear = params.get('year');
       }
-      if (params.get('outlet')) setSelectedOutlets([params.get('outlet')]);
+      if (params.get('outlet')) {
+        initialOutlets = [params.get('outlet')];
+        localStorage.setItem('preferred_grafik_outlets', JSON.stringify(initialOutlets));
+      }
       if (params.get('category')) setSelectedUtilities([params.get('category')]);
     }
     setTargetYear(initialYear);
+    setSelectedOutlets(initialOutlets);
     
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -206,8 +216,11 @@ export default function GrafikPage() {
                       <div 
                         key={i}
                         onClick={() => {
-                          if (isSelected) setSelectedOutlets(selectedOutlets.filter(o => o !== outlet));
-                          else setSelectedOutlets([...selectedOutlets, outlet]);
+                          let newOutlets;
+                          if (isSelected) newOutlets = selectedOutlets.filter(o => o !== outlet);
+                          else newOutlets = [...selectedOutlets, outlet];
+                          setSelectedOutlets(newOutlets);
+                          localStorage.setItem('preferred_grafik_outlets', JSON.stringify(newOutlets));
                         }}
                         className={`flex items-center px-3 py-2 cursor-pointer rounded text-sm transition-colors
                           ${!isYangMasuk ? 'opacity-50 grayscale bg-slate-50 hover:bg-slate-100' : 'hover:bg-blue-50'}

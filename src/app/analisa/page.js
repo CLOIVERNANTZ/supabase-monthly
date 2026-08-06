@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
+import { supabase2 } from '@/lib/supabase2';
 import { Download, Check, X, MessageSquare, AlertTriangle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { formatUIDate } from '@/utils/dateFormatter';
@@ -13,6 +14,7 @@ export default function AnalisaPage() {
   const [notes, setNotes] = useState({});
   const [loading, setLoading] = useState(false);
   const [urlOutlet, setUrlOutlet] = useState(null);
+  const [pics, setPics] = useState([]);
   
   const [analisaView, setAnalisaView] = useState('group'); // 'list' or 'group'
   const [editingNote, setEditingNote] = useState(null); // { outlet, category, text }
@@ -92,6 +94,22 @@ export default function AnalisaPage() {
         setNotes(notesObj);
       }
       
+      // Fetch PICs
+      let picsData = [];
+      if (supabase2) {
+        console.log("Fetching PICs from DB2...");
+        const { data: usersData, error: usersError } = await supabase2.from('users').select('fullname, accessOutlets').eq('role', 'SPV AP');
+        if (usersError) {
+          console.error("Error fetching DB2 users:", usersError);
+        } else if (usersData) {
+          console.log("Fetched DB2 users:", usersData);
+          picsData = usersData;
+        }
+      } else {
+        console.warn("supabase2 is null. Check NEXT_PUBLIC_SUPABASE_URL_2 and NEXT_PUBLIC_SUPABASE_ANON_KEY_2 environment variables.");
+      }
+      setPics(picsData);
+      
       processData(rawTargetData || [], rawCompareData || []);
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -152,6 +170,38 @@ export default function AnalisaPage() {
     }
   };
 
+  const toggleStatus = async (outlet, category) => {
+    const catDB = `${category}_STATUS`;
+    const statusKey = `${outlet}_${catDB}`;
+    const isDone = notes[statusKey] === 'DONE';
+    const newStatus = isDone ? '' : 'DONE';
+    
+    const formattedTarget = `${targetMonth}-01`;
+    
+    // Optimistic UI update
+    const newNotes = { ...notes };
+    if (!newStatus) {
+      delete newNotes[statusKey];
+    } else {
+      newNotes[statusKey] = newStatus;
+    }
+    setNotes(newNotes);
+    
+    try {
+      if (!newStatus) {
+        await supabase.from('a_utilities_notes').delete().match({ outlet_code: outlet, upload_month: formattedTarget, category: catDB });
+      } else {
+        await supabase.from('a_utilities_notes').upsert({
+          outlet_code: outlet, upload_month: formattedTarget, category: catDB, note: newStatus
+        }, { onConflict: 'outlet_code,upload_month,category' });
+      }
+    } catch (err) {
+      console.error('Error saving status:', err);
+      // Revert on error (optional, simple alert for now)
+      alert('Gagal mengubah status');
+    }
+  };
+
   const handleAnomalyClick = async (outletCode, category) => {
     setDrilldownOutlet(`${outletCode} - ${category}`);
     setShowDrilldown(true);
@@ -198,6 +248,72 @@ export default function AnalisaPage() {
     });
     return Object.entries(groups).map(([outlet, items]) => ({ outlet, items }));
   }, [anomalies]);
+  
+  const groupedByPic = useMemo(() => {
+    if (analisaView !== 'pic') return [];
+    
+    const outletAnomalies = {};
+    groupedAnomalies.forEach(g => outletAnomalies[g.outlet.trim().toUpperCase()] = g.items);
+    
+    console.log("=== DEBUG PIC MAPPING ===");
+    console.log("1. Total PICs:", pics.length);
+    console.log("2. Anomalies Available for Outlets:", Object.keys(outletAnomalies));
+
+    const picGroups = pics.map(pic => {
+      let assignedOutlets = [];
+      try {
+        assignedOutlets = typeof pic.accessOutlets === 'string' ? JSON.parse(pic.accessOutlets) : pic.accessOutlets;
+      } catch (e) { assignedOutlets = []; }
+      
+      const items = [];
+      (assignedOutlets || []).forEach(o => {
+        const outCode = o.trim().toUpperCase();
+        if (outletAnomalies[outCode]) {
+          items.push({ outlet: outCode, anomalies: outletAnomalies[outCode] });
+        }
+      });
+      
+      return {
+        picName: pic.fullname,
+        items: items
+      };
+    }).filter(g => g.items.length > 0);
+    
+    // Find unmapped outlets
+    const allMappedOutlets = new Set();
+    pics.forEach(pic => {
+      let assigned = [];
+      try { assigned = typeof pic.accessOutlets === 'string' ? JSON.parse(pic.accessOutlets) : pic.accessOutlets; } catch(e){}
+      (assigned || []).forEach(o => allMappedOutlets.add(o.trim().toUpperCase()));
+    });
+    
+    const unmappedItems = [];
+    groupedAnomalies.forEach(g => {
+      if (!allMappedOutlets.has(g.outlet.trim().toUpperCase())) {
+        unmappedItems.push({ outlet: g.outlet, anomalies: g.items });
+      }
+    });
+    
+    if (unmappedItems.length > 0) {
+      picGroups.push({
+        picName: 'Tidak Ada PIC',
+        items: unmappedItems
+      });
+    }
+    
+    // Sort items inside each picGroup: "Done" at the bottom
+    picGroups.forEach(group => {
+      group.items.sort((a, b) => {
+        const aDone = notes[`${a.outlet}_SUMMARY_STATUS`] === 'DONE';
+        const bDone = notes[`${b.outlet}_SUMMARY_STATUS`] === 'DONE';
+        if (aDone && !bDone) return 1;
+        if (!aDone && bDone) return -1;
+        return a.outlet.localeCompare(b.outlet);
+      });
+    });
+    
+    return picGroups;
+  }, [groupedAnomalies, pics, notes, analisaView]);
   
   const exportAnalisa = () => {
     const exportData = groupedAnomalies.map(group => {
@@ -270,6 +386,7 @@ export default function AnalisaPage() {
           <div className="bg-slate-100 p-1 rounded-lg flex text-sm font-medium">
             <button onClick={() => setAnalisaView('list')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'list' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>List Baris</button>
             <button onClick={() => setAnalisaView('group')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'group' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Group by Outlet</button>
+            <button onClick={() => setAnalisaView('pic')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'pic' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Group by PIC</button>
           </div>
           {urlOutlet && (
              <button onClick={() => setUrlOutlet(null)} className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-md text-sm font-medium hover:bg-blue-200 transition-colors flex items-center gap-1">
@@ -338,7 +455,7 @@ export default function AnalisaPage() {
             </div>
           ))}
         </div>
-      ) : (
+      ) : analisaView === 'group' ? (
         <div className="space-y-6">
           {Object.entries(
             anomalies.reduce((acc, curr) => {
@@ -393,7 +510,50 @@ export default function AnalisaPage() {
             </div>
           ))}
         </div>
-      )}
+      ) : analisaView === 'pic' ? (
+        <div className="space-y-8">
+          {groupedByPic.map((group, i) => (
+            <div key={i} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+               <div className="bg-blue-50 px-4 py-3 border-b border-slate-200">
+                 <h3 className="font-black text-blue-800 text-lg uppercase tracking-wide">{group.picName}</h3>
+               </div>
+               <div className="p-4 grid grid-cols-1 gap-4">
+                 {group.items.map(item => {
+                   const isMasterDone = notes[`${item.outlet}_SUMMARY_STATUS`] === 'DONE';
+                   return (
+                     <div key={item.outlet} className={`p-2 rounded border flex flex-col md:flex-row items-center gap-3 transition-all ${isMasterDone ? 'bg-slate-50 border-slate-200 grayscale opacity-70' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                       <div className="font-black text-slate-800 uppercase text-xs w-20 shrink-0 text-center md:text-left">{item.outlet}</div>
+                       
+                       <div className="flex-1 min-w-0 flex flex-col gap-1 w-full">
+                         {item.anomalies.map((ano, idx) => {
+                             const isUtilDone = notes[`${item.outlet}_${ano.category}_STATUS`] === 'DONE';
+                             const noteText = notes[`${item.outlet}_${ano.category}`];
+                             return (
+                               <div key={ano.category} className="flex items-center gap-2 text-[10px]">
+                                 <span className={`px-1.5 py-0.5 rounded shrink-0 ${isUtilDone || isMasterDone ? 'bg-slate-100 text-slate-400 line-through' : 'bg-red-50 text-red-700 font-medium'}`}>
+                                   {ano.category} {ano.diff > 0 ? 'NAIK' : 'TURUN'} {Math.abs(ano.pct).toFixed(0)}%
+                                 </span>
+                                 <span className="text-slate-600 truncate flex-1">{noteText ? `- ${noteText}` : ''}</span>
+                               </div>
+                             );
+                         })}
+                       </div>
+                       
+                       <div className="flex items-center gap-2 shrink-0">
+                         <span className="text-[10px] font-bold text-slate-500 uppercase">Done</span>
+                         <label className="relative inline-flex items-center cursor-pointer">
+                           <input type="checkbox" className="sr-only peer" checked={isMasterDone} onChange={() => toggleStatus(item.outlet, 'SUMMARY')} />
+                           <div className="w-7 h-3.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-2.5 after:w-2.5 after:transition-all peer-checked:bg-blue-600"></div>
+                         </label>
+                       </div>
+                     </div>
+                   );
+                 })}
+               </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {/* Drilldown Modal */}
       {showDrilldown && (

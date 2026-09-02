@@ -87,7 +87,7 @@ export default function GrafikDB2({ selectedOutlets = [], targetYear = '' }) {
         // 2. Fetch from progress_pajak_detail
         const { data: pajakData, error: pajakError } = await supabase2
           .from('progress_pajak_detail')
-          .select('outlet, utilitas, usage, tarif, inv_usage, periode, periode_usage')
+          .select('outlet, utilitas, usage, tarif, inv_usage, dpp, ppn, periode, periode_usage')
           .in('outlet', selectedOutlets)
           .or(`periode.ilike.%${targetYear}%,periode.ilike.%${shortYear}%,periode_usage.ilike.%${targetYear}%,periode_usage.ilike.%${shortYear}%`);
         
@@ -96,7 +96,7 @@ export default function GrafikDB2({ selectedOutlets = [], targetYear = '' }) {
         const validPajak = (pajakData || []).map(row => ({
           outlet: row.outlet,
           utility: row.utilitas,
-          totalInv: row.inv_usage,
+          totalInv: (row.inv_usage != null) ? row.inv_usage : ((Number(row.dpp) || 0) + (Number(row.ppn) || 0)),
           totalNet: 0,
           tarif: row.tarif,
           usage: row.usage,

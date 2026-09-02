@@ -71,17 +71,40 @@ export default function GrafikDB2({ selectedOutlets = [], targetYear = '' }) {
           throw new Error("Konfigurasi DB2 (NEXT_PUBLIC_SUPABASE_URL_2) tidak ditemukan di environment production.");
         }
 
-        const { data, error: fetchError } = await supabase2
+        // 1. Fetch from payments
+        const { data: paymentsData, error: paymentsError } = await supabase2
           .from('payments')
           .select('outlet, utility, totalNet, totalInv, tarif, usage, periode, status')
           .in('outlet', selectedOutlets)
           .or(`periode.ilike.%${targetYear}%,periode.ilike.%${shortYear}%`);
 
-        if (fetchError) throw fetchError;
+        if (paymentsError) throw paymentsError;
         
-        const validData = (data || []).filter(row => 
+        const validPayments = (paymentsData || []).filter(row => 
           row.status !== 'REJECTED' && row.status !== 'VOID'
         );
+
+        // 2. Fetch from progress_pajak_detail
+        const { data: pajakData, error: pajakError } = await supabase2
+          .from('progress_pajak_detail')
+          .select('outlet, utilitas, usage, tarif, inv_usage, periode')
+          .in('outlet', selectedOutlets)
+          .or(`periode.ilike.%${targetYear}%,periode.ilike.%${shortYear}%`);
+        
+        if (pajakError) throw pajakError;
+        
+        const validPajak = (pajakData || []).map(row => ({
+          outlet: row.outlet,
+          utility: row.utilitas,
+          totalInv: row.inv_usage,
+          totalNet: 0,
+          tarif: row.tarif,
+          usage: row.usage,
+          periode: row.periode,
+          status: 'PAJAK' // Dummy status so it's not filtered out
+        }));
+
+        const validData = [...validPayments, ...validPajak];
 
         if (isMounted) {
             setRawData(validData);

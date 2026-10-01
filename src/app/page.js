@@ -228,15 +228,6 @@ export default function Dashboard() {
       columns.push({ key: `sum_${cat}`, width: 15 });
     });
     
-    // Detailed columns (right side)
-    if (compareMonth) {
-      categories.forEach(cat => {
-        columns.push({ key: `${cat}_curr`, width: 15 });
-        columns.push({ key: `${cat}_prev`, width: 15 });
-        columns.push({ key: `${cat}_diff`, width: 15 });
-        columns.push({ key: `${cat}_status`, width: 20 });
-      });
-    }
     worksheet.columns = columns;
     
     // 2. Build Header Row 1
@@ -245,14 +236,6 @@ export default function Dashboard() {
     headerRow1.push(sumTitle);
     for (let i = 1; i < categories.length; i++) headerRow1.push(''); // spacing for merge
     
-    if (compareMonth) {
-      categories.forEach(cat => {
-        headerRow1.push(cat);
-        headerRow1.push('');
-        headerRow1.push('');
-        headerRow1.push(''); // spacing for merge (4 cols per cat)
-      });
-    }
     worksheet.addRow(headerRow1);
     
     // 3. Build Header Row 2
@@ -261,14 +244,6 @@ export default function Dashboard() {
       headerRow2.push(cat);
     });
     
-    if (compareMonth) {
-      categories.forEach(cat => {
-        headerRow2.push('Bulan Ini');
-        headerRow2.push('Bulan Lalu');
-        headerRow2.push('Selisih');
-        headerRow2.push('Status');
-      });
-    }
     worksheet.addRow(headerRow2);
     
     // 4. Merge Cells & Style Headers
@@ -277,14 +252,6 @@ export default function Dashboard() {
     let sumStart = 2;
     let sumEnd = sumStart + categories.length - 1;
     if (sumEnd >= sumStart) worksheet.mergeCells(1, sumStart, 1, sumEnd);
-    
-    if (compareMonth) {
-      let detStart = sumEnd + 1;
-      categories.forEach(() => {
-        worksheet.mergeCells(1, detStart, 1, detStart + 3);
-        detStart += 4;
-      });
-    }
     
     worksheet.getRow(1).font = { bold: true };
     worksheet.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' };
@@ -313,48 +280,42 @@ export default function Dashboard() {
         categories.forEach(cat => {
           rowData[`sum_${cat}`] = row[cat] || 0;
         });
-        if (compareMonth) {
-          categories.forEach(cat => {
-            const curr = row[cat] || 0;
-            const prev = row[`${cat}_prev`] || 0;
-            const diff = row[`${cat}_diff`] || 0;
-            const pct = prev > 0 ? (diff / prev) * 100 : (diff > 0 ? 100 : 0);
-            let statusText = 'TETAP';
-            if (diff > 1000000) statusText = `NAIK ${diff.toLocaleString('id-ID')}`;
-            else if (pct > 10) statusText = `NAIK ${pct.toFixed(1)}%`;
-            else if (diff > 0) statusText = `NAIK ${pct.toFixed(0)}%`;
-            else if (diff < 0) statusText = `TURUN ${Math.abs(pct).toFixed(0)}%`;
-            rowData[`${cat}_curr`] = curr;
-            rowData[`${cat}_prev`] = prev;
-            rowData[`${cat}_diff`] = diff;
-            rowData[`${cat}_status`] = statusText;
-          });
-        }
-        
+          
         const excelRow = worksheet.addRow(rowData);
-        
+          
+        if (row.yang_masuk === false) {
+          excelRow.getCell('Outlet').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+          excelRow.getCell('Outlet').font = { color: { argb: 'FF94A3B8' } };
+        }
+          
         categories.forEach(cat => {
           const hasM1 = mPlus1Set.has(`${row.Outlet}-${cat}`);
           const isBlank = blankSet.has(`${row.Outlet}-${cat}`);
           const noteInfo = notesMap[`${row.Outlet}-${cat}`];
-          
+            
           let argb = null;
           if (noteInfo?.color === 'red') argb = 'FFFFCCCC';
           else if (noteInfo?.color === 'yellow') argb = 'FFFFFFCC';
           else if (noteInfo?.color === 'blue') argb = 'FFCCE5FF';
           else if (isBlank) argb = 'FF92D050'; // User requested #92D050
           else if (hasM1) argb = 'FFFCE7F3'; // pink-100
-          
+          else if (row.yang_masuk === false) argb = 'FFE2E8F0';
+            
           const sumCell = excelRow.getCell(`sum_${cat}`);
           if (argb) sumCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
           if (noteInfo?.note) sumCell.note = noteInfo.note;
-          if (isBlank) sumCell.font = { color: { argb: 'FF000000' } }; // Black text
-          
-          if (compareMonth) {
-            const detCell = excelRow.getCell(`${cat}_curr`);
-            if (argb) detCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
-            if (noteInfo?.note) detCell.note = noteInfo.note;
-            if (isBlank) detCell.font = { color: { argb: 'FF000000' } }; // Black text
+            
+          const val = row[cat] || 0;
+          if (val > 0) {
+            sumCell.value = val;
+            sumCell.numFmt = '#,##0';
+          } else {
+            sumCell.value = isBlank ? null : '-';
+            sumCell.alignment = { horizontal: 'right' };
+          }
+            
+          if (row.yang_masuk === false && !isBlank && !noteInfo?.color) {
+            sumCell.font = { color: { argb: 'FF94A3B8' } };
           }
         });
       });
@@ -371,6 +332,28 @@ export default function Dashboard() {
     const otherRows = filteredData.filter(r => !rowsRendered.has(r.Outlet));
     renderExcelGroup('OTHERS', otherRows);
 
+    // 6. Grand Total Row
+    const gtRowData = { Outlet: 'GRAND TOTAL' };
+    categories.forEach(cat => {
+      gtRowData[`sum_${cat}`] = filteredData.reduce((sum, row) => {
+         return sum + (row[cat] || 0);
+      }, 0);
+    });
+    const gtExcelRow = worksheet.addRow(gtRowData);
+    gtExcelRow.font = { bold: true };
+    gtExcelRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }; // blue-100
+    categories.forEach(cat => {
+      const cell = gtExcelRow.getCell(`sum_${cat}`);
+      const val = gtRowData[`sum_${cat}`];
+      if (val > 0) {
+         cell.value = val;
+         cell.numFmt = '#,##0';
+      } else {
+         cell.value = '-';
+         cell.alignment = { horizontal: 'right' };
+      }
+    });
+  
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `Export_Utilitas_${targetMonth}.xlsx`);
   };
@@ -714,7 +697,22 @@ export default function Dashboard() {
                 return elements;
               })()}
             </tbody>
-          </table>
+              <tfoot className="sticky bottom-0 z-20 shadow-[0_-2px_5px_rgba(0,0,0,0.1)]">
+                <tr className="bg-blue-100">
+                  <td className="px-1.5 py-1.5 text-xs font-black text-slate-800 border-t border-b border-r border-slate-300 sticky left-0 bg-blue-100 z-30">
+                    GRAND TOTAL
+                  </td>
+                  {categories.map(cat => {
+                    const total = filteredData.reduce((sum, row) => sum + (row[cat] || 0), 0);
+                    return (
+                      <td key={`gt_${cat}`} className="px-1.5 py-1.5 text-xs whitespace-nowrap text-right font-black text-blue-900 border-t border-b border-r border-slate-300">
+                        {total > 0 ? total.toLocaleString('id-ID') : '-'}
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tfoot>
+            </table>
           </div>
         </div>
       )}

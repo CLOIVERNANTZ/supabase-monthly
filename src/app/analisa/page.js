@@ -16,9 +16,10 @@ export default function AnalisaPage() {
   const [urlOutlet, setUrlOutlet] = useState(null);
   const [pics, setPics] = useState([]);
   
-  const [analisaView, setAnalisaView] = useState('group'); // 'list' or 'group'
+  const [analisaView, setAnalisaView] = useState('group'); // 'list' | 'group' | 'pic' | 'spv'
   const [editingNote, setEditingNote] = useState(null); // { outlet, category, text }
   const [savingNote, setSavingNote] = useState(false);
+  const [collapsedOutlets, setCollapsedOutlets] = useState(new Set());
 
   // Drilldown states
   const [showDrilldown, setShowDrilldown] = useState(false);
@@ -314,15 +315,94 @@ export default function AnalisaPage() {
     
     return picGroups;
   }, [groupedAnomalies, pics, notes, analisaView]);
-  
+
+  // Grouped by SPV: always computed, includes both anomaly outlets AND blank/empty outlets
+  const groupedBySpv = useMemo(() => {
+    const outletAnomalies = {};
+    groupedAnomalies.forEach(g => outletAnomalies[g.outlet.trim().toUpperCase()] = g.items);
+
+    // Outlets with blank/missing data = in data but has a category with 0 or missing current value
+    const blankOutlets = new Set();
+    data.forEach(row => {
+      if (urlOutlet && row.Outlet !== urlOutlet) return;
+      const hasSomeData = categories.some(cat => (row[cat] || 0) > 0);
+      if (!hasSomeData) { blankOutlets.add(row.Outlet.trim().toUpperCase()); return; }
+      categories.forEach(cat => {
+        if ((row[`${cat}_prev`] || 0) > 0 && (row[cat] || 0) === 0) {
+          blankOutlets.add(row.Outlet.trim().toUpperCase());
+        }
+      });
+    });
+
+    const allMappedOutlets = new Set();
+    const spvGroups = pics.map(pic => {
+      let assignedOutlets = [];
+      try { assignedOutlets = typeof pic.accessOutlets === 'string' ? JSON.parse(pic.accessOutlets) : pic.accessOutlets; } catch(e){}
+      (assignedOutlets || []).forEach(o => allMappedOutlets.add(o.trim().toUpperCase()));
+
+      const anomalyItems = [];
+      const blankItems = [];
+      (assignedOutlets || []).forEach(o => {
+        const outCode = o.trim().toUpperCase();
+        if (outletAnomalies[outCode]) anomalyItems.push({ outlet: outCode, anomalies: outletAnomalies[outCode] });
+        else if (blankOutlets.has(outCode)) blankItems.push({ outlet: outCode });
+      });
+
+      // Sort: OPEN first, DONE last
+      anomalyItems.sort((a, b) => {
+        const aDone = notes[`${a.outlet}_SUMMARY_STATUS`] === 'DONE';
+        const bDone = notes[`${b.outlet}_SUMMARY_STATUS`] === 'DONE';
+        if (aDone && !bDone) return 1;
+        if (!aDone && bDone) return -1;
+        return a.outlet.localeCompare(b.outlet);
+      });
+
+      return { picName: pic.fullname, anomalyItems, blankItems };
+    }).filter(g => g.anomalyItems.length > 0 || g.blankItems.length > 0);
+
+    // Unmapped outlets with anomalies
+    const unmappedAnomalies = [];
+    const unmappedBlanks = [];
+    groupedAnomalies.forEach(g => {
+      if (!allMappedOutlets.has(g.outlet.trim().toUpperCase())) unmappedAnomalies.push({ outlet: g.outlet, anomalies: g.items });
+    });
+    blankOutlets.forEach(o => {
+      if (!allMappedOutlets.has(o)) unmappedBlanks.push({ outlet: o });
+    });
+    if (unmappedAnomalies.length > 0 || unmappedBlanks.length > 0) {
+      spvGroups.push({ picName: 'Tidak Ada PIC', anomalyItems: unmappedAnomalies, blankItems: unmappedBlanks });
+    }
+
+    return spvGroups;
+  }, [groupedAnomalies, pics, notes, data, urlOutlet]);
+
+  const toggleCollapse = (key) => {
+    setCollapsedOutlets(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const exportAnalisa = () => {
+    // Buat pemetaan Outlet -> PIC
+    const outletPicMap = {};
+    pics.forEach(pic => {
+      let assignedOutlets = [];
+      try { assignedOutlets = typeof pic.accessOutlets === 'string' ? JSON.parse(pic.accessOutlets) : pic.accessOutlets; } catch(e){}
+      (assignedOutlets || []).forEach(o => {
+        outletPicMap[o.trim().toUpperCase()] = pic.fullname;
+      });
+    });
+
     const exportData = groupedAnomalies.map(group => {
-      const naikItems = group.items.filter(item => item.diff > 0);
-      if (naikItems.length === 0) return null;
+      if (group.items.length === 0) return null;
       
-      const detailString = naikItems.map(item => 
-        `${item.category} NAIK ${item.pct.toFixed(0)}% Rp ${item.diff.toLocaleString('id-ID')}`
-      ).join(', ');
+      const detailString = group.items.map(item => {
+        const dir = item.diff > 0 ? 'NAIK' : 'TURUN';
+        return `${item.category} ${dir} ${Math.abs(item.pct).toFixed(0)}% Rp ${Math.abs(item.diff).toLocaleString('id-ID')}`;
+      }).join(', ');
 
       // Kumpulkan semua catatan untuk outlet ini (Summary + per Kategori)
       let combinedNotes = notes[`${group.outlet}_SUMMARY`] || '';
@@ -336,12 +416,23 @@ export default function AnalisaPage() {
         combinedNotes += (combinedNotes ? ', ' : '') + catNotes.join(', ');
       }
 
+      const isDone = notes[`${group.outlet}_SUMMARY_STATUS`] === 'DONE' ? 'DONE' : 'OPEN';
+
       return {
+        'PIC': outletPicMap[group.outlet.trim().toUpperCase()] || 'Tidak Ada PIC',
         'Outlet': group.outlet,
-        'Keterangan Kenaikan': detailString,
-        'Catatan': combinedNotes
+        'Keterangan Anomali': detailString,
+        'Catatan': combinedNotes,
+        'Status': isDone
       };
     }).filter(Boolean);
+
+    // Sort: OPEN dulu, baru DONE. Lalu berdasarkan PIC, lalu Outlet.
+    exportData.sort((a, b) => {
+      if (a.Status !== b.Status) return a.Status === 'DONE' ? 1 : -1;
+      if (a.PIC !== b.PIC) return a.PIC.localeCompare(b.PIC);
+      return a.Outlet.localeCompare(b.Outlet);
+    });
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
@@ -387,6 +478,7 @@ export default function AnalisaPage() {
             <button onClick={() => setAnalisaView('list')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'list' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>List Baris</button>
             <button onClick={() => setAnalisaView('group')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'group' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Group by Outlet</button>
             <button onClick={() => setAnalisaView('pic')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'pic' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Group by PIC</button>
+            <button onClick={() => setAnalisaView('spv')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'spv' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Ringkasan SPV</button>
           </div>
           {urlOutlet && (
              <button onClick={() => setUrlOutlet(null)} className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-md text-sm font-medium hover:bg-blue-200 transition-colors flex items-center gap-1">
@@ -550,6 +642,154 @@ export default function AnalisaPage() {
                    );
                  })}
                </div>
+            </div>
+          ))}
+        </div>
+      ) : analisaView === 'spv' ? (
+        <div className="space-y-6">
+          {groupedBySpv.length === 0 ? (
+            <div className="bg-blue-50 text-blue-700 p-8 text-center rounded-xl border border-blue-200 font-bold">
+              Tidak ada data anomali atau kosong. Pastikan PIC sudah terdaftar di database.
+            </div>
+          ) : groupedBySpv.map((spvGroup, gi) => (
+            <div key={gi} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="bg-indigo-600 px-5 py-3 flex items-center justify-between">
+                <h3 className="font-black text-white text-base uppercase tracking-wide">{spvGroup.picName}</h3>
+                <div className="flex items-center gap-2">
+                  {spvGroup.anomalyItems.length > 0 && <span className="text-[10px] font-bold bg-red-500/80 text-white px-2 py-0.5 rounded-full">{spvGroup.anomalyItems.length} Anomali</span>}
+                  {spvGroup.blankItems.length > 0 && <span className="text-[10px] font-bold bg-yellow-300/80 text-indigo-900 px-2 py-0.5 rounded-full">{spvGroup.blankItems.length} Kosong</span>}
+                </div>
+              </div>
+
+              {spvGroup.anomalyItems.length > 0 && (
+                <div>
+                  <div className="bg-red-50 px-5 py-2 border-b border-red-100">
+                    <span className="text-xs font-black text-red-700 uppercase tracking-wider">⚡ Deteksi Lonjakan / Anomali Tagihan</span>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {spvGroup.anomalyItems.map(item => {
+                      const collapseKey = `${spvGroup.picName}_${item.outlet}`;
+                      const isCollapsed = collapsedOutlets.has(collapseKey);
+                      const isMasterDone = notes[`${item.outlet}_SUMMARY_STATUS`] === 'DONE';
+                      const hasRedAlert = item.anomalies.some(a => Math.abs(a.diff) > 1000000 || Math.abs(a.pct) > 30);
+                      return (
+                        <div key={item.outlet} className={`transition-all ${isMasterDone ? 'opacity-50 grayscale' : ''}`}>
+                          <div
+                            className={`flex items-center gap-3 px-4 py-2 cursor-pointer hover:bg-slate-50 ${hasRedAlert && !isMasterDone ? 'border-l-4 border-red-500' : 'border-l-4 border-amber-400'}`}
+                            onClick={() => toggleCollapse(collapseKey)}
+                          >
+                            <span className="font-black text-xs text-slate-700 w-16 shrink-0">{item.outlet}</span>
+                            <div className="flex-1 flex flex-wrap gap-1.5 min-w-0">
+                              {item.anomalies.map(a => {
+                                const isRed = Math.abs(a.diff) > 1000000 || Math.abs(a.pct) > 30;
+                                return (
+                                  <span key={a.category} className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${isRed ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                    {a.category} {a.diff > 0 ? '\u25b2' : '\u25bc'}{Math.abs(a.pct).toFixed(0)}%
+                                  </span>
+                                );
+                              })}
+                              {notes[`${item.outlet}_SUMMARY`] && (
+                                <span className="text-[10px] text-slate-500 italic truncate">&mdash; {notes[`${item.outlet}_SUMMARY`]}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {isMasterDone && <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">✓ Done</span>}
+                              <span className="text-[10px] text-slate-400">{isCollapsed ? '\u25bc' : '\u25b2'}</span>
+                            </div>
+                          </div>
+                          {!isCollapsed && (
+                            <div className="bg-slate-50 px-4 pb-3 pt-1 border-t border-slate-100">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                                {item.anomalies.map(a => {
+                                  const isRed = Math.abs(a.diff) > 1000000 || Math.abs(a.pct) > 30;
+                                  const noteText = notes[`${item.outlet}_${a.category}`];
+                                  const isUtilDone = notes[`${item.outlet}_${a.category}_STATUS`] === 'DONE';
+                                  return (
+                                    <div key={a.category} className={`rounded-lg p-2.5 border ${isRed ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'} ${isUtilDone ? 'opacity-50' : ''}`}>
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className={`text-[11px] font-black ${isRed ? 'text-red-700' : 'text-amber-700'}`}>{a.category}</span>
+                                        <span className={`text-[11px] font-bold ${a.diff > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                                          {a.diff > 0 ? '\u25b2' : '\u25bc'} {Math.abs(a.pct).toFixed(1)}% &middot; Rp {Math.abs(a.diff).toLocaleString('id-ID')}
+                                        </span>
+                                      </div>
+                                      {editingNote?.outlet === item.outlet && editingNote?.category === a.category ? (
+                                        <div className="flex gap-1.5">
+                                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Poin yang perlu dicek..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                                          <button onClick={saveNote} disabled={savingNote} className="px-1.5 bg-blue-600 text-white rounded"><Check className="w-3 h-3"/></button>
+                                          <button onClick={() => setEditingNote(null)} className="px-1.5 bg-slate-200 text-slate-600 rounded"><X className="w-3 h-3"/></button>
+                                        </div>
+                                      ) : noteText ? (
+                                        <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: noteText})} className="text-[10px] text-yellow-800 bg-yellow-50 border border-yellow-200 rounded px-1.5 py-1 cursor-pointer hover:bg-yellow-100">{noteText}</div>
+                                      ) : (
+                                        <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: ''})} className="text-[10px] text-slate-400 cursor-pointer hover:text-blue-500 flex items-center gap-1"><MessageSquare className="w-2.5 h-2.5"/> Tambah poin cek...</div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                                {editingNote?.outlet === item.outlet && editingNote?.category === 'SUMMARY' ? (
+                                  <div className="flex gap-2 flex-1">
+                                    <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Catatan ringkasan outlet..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                                    <button onClick={saveNote} disabled={savingNote} className="px-2 bg-blue-600 text-white rounded text-xs"><Check className="w-3 h-3"/></button>
+                                    <button onClick={() => setEditingNote(null)} className="px-2 bg-slate-200 text-slate-600 rounded text-xs"><X className="w-3 h-3"/></button>
+                                  </div>
+                                ) : (
+                                  <div onClick={() => setEditingNote({outlet: item.outlet, category: 'SUMMARY', text: notes[`${item.outlet}_SUMMARY`] || ''})} className="text-[10px] text-slate-500 cursor-pointer hover:text-blue-500 flex-1 truncate">
+                                    {notes[`${item.outlet}_SUMMARY`] ? <span className="text-yellow-800">📝 {notes[`${item.outlet}_SUMMARY`]}</span> : '+ Catatan ringkasan outlet'}
+                                  </div>
+                                )}
+                                <label className="relative inline-flex items-center cursor-pointer gap-1.5 ml-3 shrink-0">
+                                  <input type="checkbox" className="sr-only peer" checked={isMasterDone} onChange={() => toggleStatus(item.outlet, 'SUMMARY')} />
+                                  <div className="w-7 h-3.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-2.5 after:w-2.5 after:transition-all peer-checked:bg-emerald-500"></div>
+                                  <span className="text-[10px] font-bold text-slate-500">Done</span>
+                                </label>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {spvGroup.blankItems.length > 0 && (
+                <div>
+                  <div className="bg-yellow-50 px-5 py-2 border-t border-b border-yellow-100">
+                    <span className="text-xs font-black text-yellow-700 uppercase tracking-wider">⏳ Menunggu Inputan / Data Kosong</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 px-5 py-3">
+                    {spvGroup.blankItems.map(item => {
+                      const collapseKey = `blank_${spvGroup.picName}_${item.outlet}`;
+                      const isCollapsed = collapsedOutlets.has(collapseKey);
+                      return (
+                        <div key={item.outlet} className="border border-yellow-200 rounded-lg overflow-hidden">
+                          <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-50 cursor-pointer hover:bg-yellow-100" onClick={() => toggleCollapse(collapseKey)}>
+                            <span className="text-xs font-black text-yellow-800">{item.outlet}</span>
+                            <span className="text-[10px] text-yellow-600">{isCollapsed ? '\u25bc' : '\u25b2'}</span>
+                          </div>
+                          {!isCollapsed && (
+                            <div className="px-3 pb-2 pt-1 bg-white min-w-[140px]">
+                              {editingNote?.outlet === item.outlet && editingNote?.category === 'SUMMARY' ? (
+                                <div className="flex gap-1.5">
+                                  <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                                  <button onClick={saveNote} disabled={savingNote} className="px-1.5 bg-blue-600 text-white rounded"><Check className="w-3 h-3"/></button>
+                                  <button onClick={() => setEditingNote(null)} className="px-1.5 bg-slate-200 text-slate-600 rounded"><X className="w-3 h-3"/></button>
+                                </div>
+                              ) : (
+                                <div onClick={() => setEditingNote({outlet: item.outlet, category: 'SUMMARY', text: notes[`${item.outlet}_SUMMARY`] || ''})} className="text-[10px] cursor-pointer text-slate-500 hover:text-blue-500">
+                                  {notes[`${item.outlet}_SUMMARY`] ? <span className="text-yellow-800">📝 {notes[`${item.outlet}_SUMMARY`]}</span> : '+ Tambah catatan'}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

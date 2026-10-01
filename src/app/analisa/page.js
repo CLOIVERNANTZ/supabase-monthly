@@ -477,7 +477,6 @@ export default function AnalisaPage() {
           <div className="bg-slate-100 p-1 rounded-lg flex text-sm font-medium">
             <button onClick={() => setAnalisaView('list')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'list' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>List Baris</button>
             <button onClick={() => setAnalisaView('group')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'group' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Group by Outlet</button>
-            <button onClick={() => setAnalisaView('pic')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'pic' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Group by PIC</button>
             <button onClick={() => setAnalisaView('spv')} className={`px-4 py-1.5 rounded-md transition-colors ${analisaView === 'spv' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Ringkasan SPV</button>
           </div>
           {urlOutlet && (
@@ -706,22 +705,22 @@ export default function AnalisaPage() {
                                   const isUtilDone = notes[`${item.outlet}_${a.category}_STATUS`] === 'DONE';
                                   return (
                                     <div key={a.category} className={`rounded-lg p-2.5 border ${isRed ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'} ${isUtilDone ? 'opacity-50' : ''}`}>
-                                      <div className="flex items-center justify-between mb-1">
-                                        <span className={`text-[11px] font-black ${isRed ? 'text-red-700' : 'text-amber-700'}`}>{a.category}</span>
+                                      <div className="flex items-center justify-between mb-1 cursor-pointer hover:opacity-80" onClick={() => handleAnomalyClick(item.outlet, a.category)} title="Lihat Raw Data">
+                                        <span className={`text-[11px] font-black ${isRed ? 'text-red-700' : 'text-amber-700'} underline decoration-dotted underline-offset-2`}>{a.category}</span>
                                         <span className={`text-[11px] font-bold ${a.diff > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
                                           {a.diff > 0 ? '\u25b2' : '\u25bc'} {Math.abs(a.pct).toFixed(1)}% &middot; Rp {Math.abs(a.diff).toLocaleString('id-ID')}
                                         </span>
                                       </div>
                                       {editingNote?.outlet === item.outlet && editingNote?.category === a.category ? (
                                         <div className="flex gap-1.5">
-                                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Poin yang perlu dicek..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
                                           <button onClick={saveNote} disabled={savingNote} className="px-1.5 bg-blue-600 text-white rounded"><Check className="w-3 h-3"/></button>
                                           <button onClick={() => setEditingNote(null)} className="px-1.5 bg-slate-200 text-slate-600 rounded"><X className="w-3 h-3"/></button>
                                         </div>
                                       ) : noteText ? (
                                         <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: noteText})} className="text-[10px] text-yellow-800 bg-yellow-50 border border-yellow-200 rounded px-1.5 py-1 cursor-pointer hover:bg-yellow-100">{noteText}</div>
                                       ) : (
-                                        <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: ''})} className="text-[10px] text-slate-400 cursor-pointer hover:text-blue-500 flex items-center gap-1"><MessageSquare className="w-2.5 h-2.5"/> Tambah poin cek...</div>
+                                        <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: ''})} className="text-[10px] text-slate-400 cursor-pointer hover:text-blue-500 flex items-center gap-1"><MessageSquare className="w-2.5 h-2.5"/> Tambah Catatan Analisis</div>
                                       )}
                                     </div>
                                   );

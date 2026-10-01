@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { supabase2 } from '@/lib/supabase2';
-import { Download, Check, X, MessageSquare, AlertTriangle } from 'lucide-react';
+import { Download, Check, X, MessageSquare, AlertTriangle, Wand2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { formatUIDate } from '@/utils/dateFormatter';
 
@@ -169,6 +169,172 @@ export default function AnalisaPage() {
     } finally {
       setSavingNote(false);
     }
+  };
+
+
+  const [generatingNote, setGeneratingNote] = useState(false);
+
+  const handleGenerateAutoNote = async (outlet, category) => {
+    if (!supabase2) {
+      alert("Database PIC tidak terhubung.");
+      return;
+    }
+    setGeneratingNote(true);
+    setEditingNote({ outlet, category, text: 'Memuat data DB2...' });
+    
+    try {
+      const utilsMap = {
+        'Listrik': ['UEL', 'PEM.LISTRIK', 'UEL GDG'],
+        'PAM': ['UWT'],
+        'Gas': ['UGS'],
+      };
+      const allowedUtils = utilsMap[category] || [];
+      
+      let query1 = supabase2.from('payments').select('utility, periode, usage, tarif, totalInv').eq('outlet', outlet);
+      let query2 = supabase2.from('progress_pajak_detail').select('utilitas, periode_usage, periode, usage, tarif, inv_usage, dpp, ppn').eq('outlet', outlet);
+      
+      if (allowedUtils.length > 0) {
+        query1 = query1.in('utility', allowedUtils);
+        query2 = query2.in('utilitas', allowedUtils);
+      }
+      
+      const [res1, res2] = await Promise.all([query1, query2]);
+      if (res1.error) throw res1.error;
+      if (res2.error) throw res2.error;
+      
+      let data = [];
+      if (res1.data) data = [...res1.data];
+      if (res2.data) {
+         data = [...data, ...res2.data.map(r => ({
+            utility: r.utilitas,
+            periode: r.periode_usage || r.periode,
+            usage: r.usage,
+            tarif: r.tarif,
+            totalInv: (r.inv_usage != null) ? r.inv_usage : ((Number(r.dpp) || 0) + (Number(r.ppn) || 0))
+         }))];
+      }
+      
+      if (data.length === 0) {
+        setEditingNote({ outlet, category, text: `Data ${category} tidak ditemukan di DB2.` });
+        setGeneratingNote(false);
+        return;
+      }
+      
+      const normalizePeriode = (p) => {
+         if (!p) return null;
+         p = p.toUpperCase().trim();
+         let m = p.match(/^(\d{4})-(\d{2})$/);
+         if (m) return `${m[1]}-${m[2]}`;
+         const months = ["JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"];
+         for (let i = 0; i < months.length; i++) {
+            if (p.includes(months[i])) {
+               let yM = p.match(/\d{4}/);
+               if (yM) return `${yM[0]}-${String(i+1).padStart(2, '0')}`;
+            }
+         }
+         return null;
+      };
+      
+      let targetRow = null;
+      let compareRow = null;
+      
+      // Kumpulkan per utility untuk mencari yang datanya paling lengkap dan valid
+      const utilsMapData = {};
+      for (const row of data) {
+         const norm = normalizePeriode(row.periode);
+         if (norm === targetMonth || norm === compareMonth) {
+            if (!utilsMapData[row.utility]) utilsMapData[row.utility] = {};
+            utilsMapData[row.utility][norm] = row;
+         }
+      }
+      
+      let bestUtil = null;
+      for (const [util, periods] of Object.entries(utilsMapData)) {
+         if (periods[targetMonth] && periods[compareMonth]) {
+             const uC = Number(String(periods[targetMonth].usage).replace(/,/g, '')) || 0;
+             const uP = Number(String(periods[compareMonth].usage).replace(/,/g, '')) || 0;
+             if (uC > 0 && uP > 0) {
+                 bestUtil = util;
+                 break;
+             }
+             if (!bestUtil) bestUtil = util;
+         }
+      }
+      
+      if (!bestUtil) {
+         setEditingNote({ outlet, category, text: `Data bulan current/lalu tidak lengkap di DB2.` });
+         setGeneratingNote(false);
+         return;
+      }
+      
+      targetRow = utilsMapData[bestUtil][targetMonth];
+      compareRow = utilsMapData[bestUtil][compareMonth];
+      
+      const parseNum = (v) => {
+         if (v === null || v === undefined) return 0;
+         let s = String(v).trim();
+         if (!s) return 0;
+         
+         const match = s.match(/[.,](\d+)$/);
+         if (match) {
+             const digits = match[1];
+             if (digits.length === 3) {
+                 // Terdeteksi 3 angka di belakang titik/koma -> Ribuan
+                 return Number(s.replace(/[.,]/g, '')) || 0;
+             } else {
+                 // Desimal
+                 const mainPart = s.substring(0, s.length - 1 - digits.length).replace(/[.,]/g, '');
+                 return Number(mainPart + '.' + digits) || 0;
+             }
+         }
+         return Number(s.replace(/[.,]/g, '')) || 0;
+      };
+      
+      const uCur = Math.round(parseNum(targetRow.usage));
+      const uPrev = Math.round(parseNum(compareRow.usage));
+      const tCur = Math.round(parseNum(targetRow.tarif));
+      const tPrev = Math.round(parseNum(compareRow.tarif));
+      
+      const diffUsage = Math.abs(uCur - uPrev);
+      const diffTarif = Math.abs(tCur - tPrev);
+      
+      const totalCur = Math.round(parseNum(targetRow.totalInv));
+      const totalPrev = Math.round(parseNum(compareRow.totalInv));
+      const diffTotal = Math.abs(totalCur - totalPrev);
+      
+      let noteParts = [];
+      if (diffUsage > 0) {
+          if (uCur > uPrev) {
+             noteParts.push(`Usage naik ${diffUsage.toLocaleString('id-ID')} dari ${uPrev.toLocaleString('id-ID')} jadi ${uCur.toLocaleString('id-ID')}`);
+          } else {
+             noteParts.push(`Usage turun ${diffUsage.toLocaleString('id-ID')} dari ${uPrev.toLocaleString('id-ID')} jadi ${uCur.toLocaleString('id-ID')}`);
+          }
+      }
+      
+      if (diffTarif >= 100) {
+         if (tCur > tPrev) {
+            noteParts.push(`Tarif Naik ${diffTarif.toLocaleString('id-ID')}`);
+         } else if (tCur < tPrev) {
+            noteParts.push(`Tarif Turun ${diffTarif.toLocaleString('id-ID')}`);
+         }
+      }
+      
+      let finalNote = noteParts.join(' & ');
+      if (finalNote !== '' && diffTotal > 0) {
+         finalNote += ` Total Rp ${diffTotal.toLocaleString('id-ID')}`;
+      }
+      
+      if (finalNote === '') {
+         setEditingNote({ outlet, category, text: `-` });
+      } else {
+         setEditingNote({ outlet, category, text: finalNote });
+      }
+      
+    } catch (err) {
+       console.error("Error generating auto note:", err);
+       setEditingNote({ outlet, category, text: `Gagal memuat: ${err.message}` });
+    }
+    setGeneratingNote(false);
   };
 
   const toggleStatus = async (outlet, category) => {
@@ -581,7 +747,8 @@ export default function AnalisaPage() {
                     <div className={`mt-2 pt-2 border-t group ${item.diff > 0 ? 'border-red-100/50' : 'border-emerald-100/50'}`}>
                        {editingNote?.outlet === item.outlet && editingNote?.category === item.category ? (
                         <div className="flex gap-2">
-                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} disabled={generatingNote} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                            <button onClick={() => handleGenerateAutoNote(item.outlet, item.category)} disabled={generatingNote} title="Auto-generate dari DB2" className="px-2 bg-purple-100 text-purple-700 hover:bg-purple-200 rounded transition-colors"><Wand2 className="w-3 h-3"/></button>
                           <button onClick={saveNote} disabled={savingNote} className="px-2 bg-blue-600 text-white rounded"><Check className="w-3 h-3"/></button>
                           <button onClick={() => setEditingNote(null)} className="px-2 bg-slate-200 text-slate-600 rounded"><X className="w-3 h-3"/></button>
                         </div>
@@ -590,8 +757,11 @@ export default function AnalisaPage() {
                           <span className="font-bold">Catatan:</span> {notes[`${item.outlet}_${item.category}`]}
                         </div>
                       ) : (
-                        <div onClick={() => setEditingNote({outlet: item.outlet, category: item.category, text: ''})} className="text-xs text-slate-400 cursor-pointer hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                          <MessageSquare className="w-3 h-3"/> Tambah Catatan Analisis
+                        <div className="flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div onClick={() => setEditingNote({outlet: item.outlet, category: item.category, text: ''})} className="text-xs text-slate-400 cursor-pointer hover:text-blue-500 flex items-center gap-1">
+                            <MessageSquare className="w-3 h-3"/> Tambah Catatan Analisis
+                          </div>
+                          <button onClick={(e) => { e.stopPropagation(); handleGenerateAutoNote(item.outlet, item.category); }} disabled={generatingNote} className="px-2 py-0.5 bg-blue-600 text-white text-[10px] font-bold rounded shadow flex items-center gap-1 hover:bg-blue-700 transition-colors disabled:opacity-50"><Wand2 className="w-3 h-3"/> Auto DB2</button>
                         </div>
                       )}
                     </div>
@@ -713,14 +883,21 @@ export default function AnalisaPage() {
                                       </div>
                                       {editingNote?.outlet === item.outlet && editingNote?.category === a.category ? (
                                         <div className="flex gap-1.5">
-                                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                                          <input type="text" autoFocus value={editingNote.text} onChange={e => setEditingNote({...editingNote, text: e.target.value})} onKeyDown={e => { if(e.key === 'Enter') saveNote() }} disabled={generatingNote} placeholder="Catatan..." className="flex-1 px-2 py-1 text-xs border border-blue-300 rounded focus:outline-none" />
+                                          <button onClick={() => handleGenerateAutoNote(item.outlet, a.category)} disabled={generatingNote} title="Auto-generate dari DB2" className="px-1.5 bg-purple-100 text-purple-700 hover:bg-purple-200 rounded transition-colors"><Wand2 className="w-3 h-3"/></button>
                                           <button onClick={saveNote} disabled={savingNote} className="px-1.5 bg-blue-600 text-white rounded"><Check className="w-3 h-3"/></button>
                                           <button onClick={() => setEditingNote(null)} className="px-1.5 bg-slate-200 text-slate-600 rounded"><X className="w-3 h-3"/></button>
                                         </div>
                                       ) : noteText ? (
-                                        <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: noteText})} className="text-[10px] text-yellow-800 bg-yellow-50 border border-yellow-200 rounded px-1.5 py-1 cursor-pointer hover:bg-yellow-100">{noteText}</div>
+                                        <div className="flex items-start gap-1 mt-2">
+                                          <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: noteText})} className="flex-1 text-[10px] text-yellow-800 bg-yellow-50 border border-yellow-200 rounded px-1.5 py-1 cursor-pointer hover:bg-yellow-100">{noteText}</div>
+                                          <button onClick={(e) => { e.stopPropagation(); handleGenerateAutoNote(item.outlet, a.category); }} disabled={generatingNote} className="px-1.5 py-1 bg-blue-600 text-white text-[9px] font-bold rounded shadow flex items-center justify-center hover:bg-blue-700 transition-colors disabled:opacity-50" title="Regenerate Auto Note DB2"><Wand2 className="w-3 h-3"/></button>
+                                        </div>
                                       ) : (
-                                        <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: ''})} className="text-[10px] text-slate-400 cursor-pointer hover:text-blue-500 flex items-center gap-1"><MessageSquare className="w-2.5 h-2.5"/> Tambah Catatan Analisis</div>
+                                        <div className="flex items-center justify-between mt-2">
+                                          <div onClick={() => setEditingNote({outlet: item.outlet, category: a.category, text: ''})} className="text-[10px] text-slate-400 cursor-pointer hover:text-blue-500 flex items-center gap-1"><MessageSquare className="w-2.5 h-2.5"/> Tambah Catatan Analisis</div>
+                                          <button onClick={(e) => { e.stopPropagation(); handleGenerateAutoNote(item.outlet, a.category); }} disabled={generatingNote} className="px-1.5 py-0.5 bg-blue-600 text-white text-[9px] font-bold rounded shadow flex items-center gap-1 hover:bg-blue-700 transition-colors disabled:opacity-50"><Wand2 className="w-2.5 h-2.5"/> Auto DB2</button>
+                                        </div>
                                       )}
                                     </div>
                                   );

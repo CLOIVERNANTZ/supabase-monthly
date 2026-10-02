@@ -213,7 +213,7 @@ export default function AnalisaPage() {
       if (res2.data) {
          data = [...data, ...res2.data.map(r => ({
             utility: r.utilitas,
-            periode: r.periode_usage || r.periode,
+            periode: r.periode || r.periode_usage,
             usage: r.usage,
             tarif: r.tarif,
             totalInv: (r.inv_usage != null) ? r.inv_usage : ((Number(r.dpp) || 0) + (Number(r.ppn) || 0))

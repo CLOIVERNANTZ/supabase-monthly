@@ -223,15 +223,45 @@ export default function AnalisaPage() {
       const normalizePeriode = (p) => {
          if (!p) return null;
          p = p.toUpperCase().trim();
+         // Format YYYY-MM
          let m = p.match(/^(\d{4})-(\d{2})$/);
          if (m) return `${m[1]}-${m[2]}`;
-         const months = ["JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"];
-         for (let i = 0; i < months.length; i++) {
-            if (p.includes(months[i])) {
-               let yM = p.match(/\d{4}/);
-               if (yM) return `${yM[0]}-${String(i+1).padStart(2, '0')}`;
+         
+         // Daftar nama bulan (ID dan EN, 3-huruf dan panjang)
+         const monthMap = {
+            'JAN': 1, 'JANUARI': 1, 'JANUARY': 1,
+            'FEB': 2, 'FEBRUARI': 2, 'FEBRUARY': 2,
+            'MAR': 3, 'MARET': 3, 'MARCH': 3,
+            'APR': 4, 'APRIL': 4,
+            'MEI': 5, 'MAY': 5,
+            'JUN': 6, 'JUNI': 6, 'JUNE': 6,
+            'JUL': 7, 'JULI': 7, 'JULY': 7,
+            'AGU': 8, 'AGUSTUS': 8, 'AUGUSTUS': 8, 'AUG': 8, 'AUGUST': 8,
+            'SEP': 9, 'SEPTEMBER': 9,
+            'OKT': 10, 'OKTOBER': 10, 'OCT': 10, 'OCTOBER': 10,
+            'NOV': 11, 'NOVEMBER': 11,
+            'DES': 12, 'DESEMBER': 12, 'DEC': 12, 'DECEMBER': 12,
+         };
+         
+         // Cari nama bulan yang match (dari yang terpanjang dulu)
+         const sortedKeys = Object.keys(monthMap).sort((a, b) => b.length - a.length);
+         let monthNum = null;
+         for (const key of sortedKeys) {
+            if (p.includes(key)) {
+               monthNum = monthMap[key];
+               break;
             }
          }
+         
+         if (monthNum !== null) {
+            // Coba 4-digit tahun dulu
+            let yM4 = p.match(/\d{4}/);
+            if (yM4) return `${yM4[0]}-${String(monthNum).padStart(2, '0')}`;
+            // Fallback: 2-digit tahun -> prefix 20
+            let yM2 = p.match(/\b(\d{2})\b/);
+            if (yM2) return `20${yM2[1]}-${String(monthNum).padStart(2, '0')}`;
+         }
+         
          return null;
       };
       

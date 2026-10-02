@@ -174,9 +174,58 @@ export default function AnalisaPage() {
 
   const [generatingNote, setGeneratingNote] = useState(false);
 
+  // ---------- Helpers ----------
+  const normalizePeriode = (p) => {
+    if (!p) return null;
+    p = p.toUpperCase().trim();
+    const m4 = p.match(/^(\d{4})-(\d{2})$/);
+    if (m4) return `${m4[1]}-${m4[2]}`;
+    const monthMap = {
+      'JANUARY':1,'JANUARI':1,'JAN':1,
+      'FEBRUARY':2,'FEBRUARI':2,'FEB':2,
+      'MARCH':3,'MARET':3,'MAR':3,
+      'APRIL':4,'APR':4,
+      'MAY':5,'MEI':5,
+      'JUNE':6,'JUNI':6,'JUN':6,
+      'JULY':7,'JULI':7,'JUL':7,
+      'AUGUST':8,'AGUSTUS':8,'AUGUSTUS':8,'AUG':8,'AGU':8,
+      'SEPTEMBER':9,'SEP':9,
+      'OCTOBER':10,'OKTOBER':10,'OCT':10,'OKT':10,
+      'NOVEMBER':11,'NOV':11,
+      'DECEMBER':12,'DESEMBER':12,'DEC':12,'DES':12,
+    };
+    const sortedKeys = Object.keys(monthMap).sort((a,b) => b.length - a.length);
+    let monthNum = null;
+    for (const key of sortedKeys) {
+      if (p.includes(key)) { monthNum = monthMap[key]; break; }
+    }
+    if (monthNum !== null) {
+      const yM4 = p.match(/\d{4}/);
+      if (yM4) return `${yM4[0]}-${String(monthNum).padStart(2,'0')}`;
+      const yM2 = p.match(/\b(\d{2})\b/);
+      if (yM2) return `20${yM2[1]}-${String(monthNum).padStart(2,'0')}`;
+    }
+    return null;
+  };
+
+  const parseNum = (v) => {
+    if (v === null || v === undefined) return 0;
+    const s = String(v).trim();
+    if (!s) return 0;
+    const match = s.match(/[.,](\d+)$/);
+    if (match) {
+      const digits = match[1];
+      if (digits.length === 3) return Number(s.replace(/[.,]/g, '')) || 0;
+      const mainPart = s.substring(0, s.length - 1 - digits.length).replace(/[.,]/g, '');
+      return Number(mainPart + '.' + digits) || 0;
+    }
+    return Number(s.replace(/[.,]/g, '')) || 0;
+  };
+
+  // handleGenerateAutoNote — pure local computation, no DB call
   const handleGenerateAutoNote = async (outlet, category) => {
     if (!supabase2) {
-      alert("Database PIC tidak terhubung.");
+      alert('Database PIC tidak terhubung.');
       return;
     }
     setGeneratingNote(true);
@@ -194,7 +243,8 @@ export default function AnalisaPage() {
          .select('utility, periode, usage, tarif, totalInv, status')
          .eq('outlet', outlet)
          .not('status', 'eq', 'REJECTED')
-         .not('status', 'eq', 'CANCELLED');
+         .not('status', 'eq', 'CANCELLED')
+         .not('status', 'eq', 'VOID');
       let query2 = supabase2.from('progress_pajak_detail')
          .select('utilitas, periode_usage, periode, usage, tarif, inv_usage, dpp, ppn')
          .eq('outlet', outlet);
@@ -208,10 +258,10 @@ export default function AnalisaPage() {
       if (res1.error) throw res1.error;
       if (res2.error) throw res2.error;
       
-      let data = [];
-      if (res1.data) data = [...res1.data];
+      let rows = [];
+      if (res1.data) rows = [...res1.data];
       if (res2.data) {
-         data = [...data, ...res2.data.map(r => ({
+         rows = [...rows, ...res2.data.map(r => ({
             utility: r.utilitas,
             periode: r.periode || r.periode_usage,
             usage: r.usage,
@@ -220,81 +270,34 @@ export default function AnalisaPage() {
          }))];
       }
       
-      console.log('[AutoNote] outlet:', outlet, 'category:', category, 'rows:', data.length, data.map(d => ({ utility: d.utility, periode: d.periode, usage: d.usage })));
-      
-      if (data.length === 0) {
+      if (rows.length === 0) {
         setEditingNote({ outlet, category, text: `Data ${category} tidak ditemukan di DB2.` });
         setGeneratingNote(false);
         return;
       }
       
-      const normalizePeriode = (p) => {
-         if (!p) return null;
-         p = p.toUpperCase().trim();
-         // Format YYYY-MM
-         let m = p.match(/^(\d{4})-(\d{2})$/);
-         if (m) return `${m[1]}-${m[2]}`;
-         
-         // Daftar nama bulan (ID dan EN, 3-huruf dan panjang)
-         const monthMap = {
-            'JAN': 1, 'JANUARI': 1, 'JANUARY': 1,
-            'FEB': 2, 'FEBRUARI': 2, 'FEBRUARY': 2,
-            'MAR': 3, 'MARET': 3, 'MARCH': 3,
-            'APR': 4, 'APRIL': 4,
-            'MEI': 5, 'MAY': 5,
-            'JUN': 6, 'JUNI': 6, 'JUNE': 6,
-            'JUL': 7, 'JULI': 7, 'JULY': 7,
-            'AGU': 8, 'AGUSTUS': 8, 'AUGUSTUS': 8, 'AUG': 8, 'AUGUST': 8,
-            'SEP': 9, 'SEPTEMBER': 9,
-            'OKT': 10, 'OKTOBER': 10, 'OCT': 10, 'OCTOBER': 10,
-            'NOV': 11, 'NOVEMBER': 11,
-            'DES': 12, 'DESEMBER': 12, 'DEC': 12, 'DECEMBER': 12,
-         };
-         
-         // Cari nama bulan yang match (dari yang terpanjang dulu)
-         const sortedKeys = Object.keys(monthMap).sort((a, b) => b.length - a.length);
-         let monthNum = null;
-         for (const key of sortedKeys) {
-            if (p.includes(key)) {
-               monthNum = monthMap[key];
-               break;
-            }
-         }
-         
-         if (monthNum !== null) {
-            // Coba 4-digit tahun dulu
-            let yM4 = p.match(/\d{4}/);
-            if (yM4) return `${yM4[0]}-${String(monthNum).padStart(2, '0')}`;
-            // Fallback: 2-digit tahun -> prefix 20
-            let yM2 = p.match(/\b(\d{2})\b/);
-            if (yM2) return `20${yM2[1]}-${String(monthNum).padStart(2, '0')}`;
-         }
-         
-         return null;
-      };
-      
-      let targetRow = null;
-      let compareRow = null;
-      
-      // Kumpulkan per utility untuk mencari yang datanya paling lengkap dan valid
       const utilsMapData = {};
-      for (const row of data) {
+      for (const row of rows) {
          const norm = normalizePeriode(row.periode);
          if (norm === targetMonth || norm === compareMonth) {
             if (!utilsMapData[row.utility]) utilsMapData[row.utility] = {};
-            utilsMapData[row.utility][norm] = row;
+            if (utilsMapData[row.utility][norm]) {
+               const existing = utilsMapData[row.utility][norm];
+               existing.usage = parseNum(existing.usage) + parseNum(row.usage);
+               existing.totalInv = parseNum(existing.totalInv) + parseNum(row.totalInv);
+               existing.tarif = Math.max(parseNum(existing.tarif), parseNum(row.tarif));
+            } else {
+               utilsMapData[row.utility][norm] = { ...row };
+            }
          }
       }
       
       let bestUtil = null;
       for (const [util, periods] of Object.entries(utilsMapData)) {
          if (periods[targetMonth] && periods[compareMonth]) {
-             const uC = Number(String(periods[targetMonth].usage).replace(/,/g, '')) || 0;
-             const uP = Number(String(periods[compareMonth].usage).replace(/,/g, '')) || 0;
-             if (uC > 0 && uP > 0) {
-                 bestUtil = util;
-                 break;
-             }
+             const uC = parseNum(periods[targetMonth].usage);
+             const uP = parseNum(periods[compareMonth].usage);
+             if (uC > 0 && uP > 0) { bestUtil = util; break; }
              if (!bestUtil) bestUtil = util;
          }
       }
@@ -305,71 +308,50 @@ export default function AnalisaPage() {
          return;
       }
       
-      targetRow = utilsMapData[bestUtil][targetMonth];
-      compareRow = utilsMapData[bestUtil][compareMonth];
-      
-      const parseNum = (v) => {
-         if (v === null || v === undefined) return 0;
-         let s = String(v).trim();
-         if (!s) return 0;
-         
-         const match = s.match(/[.,](\d+)$/);
-         if (match) {
-             const digits = match[1];
-             if (digits.length === 3) {
-                 // Terdeteksi 3 angka di belakang titik/koma -> Ribuan
-                 return Number(s.replace(/[.,]/g, '')) || 0;
-             } else {
-                 // Desimal
-                 const mainPart = s.substring(0, s.length - 1 - digits.length).replace(/[.,]/g, '');
-                 return Number(mainPart + '.' + digits) || 0;
-             }
-         }
-         return Number(s.replace(/[.,]/g, '')) || 0;
-      };
+      const targetRow = utilsMapData[bestUtil][targetMonth];
+      const compareRow = utilsMapData[bestUtil][compareMonth];
       
       const uCur = Math.round(parseNum(targetRow.usage));
       const uPrev = Math.round(parseNum(compareRow.usage));
       const tCur = Math.round(parseNum(targetRow.tarif));
       const tPrev = Math.round(parseNum(compareRow.tarif));
+      const totalCur = Math.round(parseNum(targetRow.totalInv));
+      const totalPrev = Math.round(parseNum(compareRow.totalInv));
       
       const diffUsage = Math.abs(uCur - uPrev);
       const diffTarif = Math.abs(tCur - tPrev);
-      
-      const totalCur = Math.round(parseNum(targetRow.totalInv));
-      const totalPrev = Math.round(parseNum(compareRow.totalInv));
       const diffTotal = Math.abs(totalCur - totalPrev);
       
       let noteParts = [];
       if (diffUsage > 0) {
           if (uCur > uPrev) {
-             noteParts.push(`Usage naik ${diffUsage.toLocaleString('id-ID')} dari ${uPrev.toLocaleString('id-ID')} jadi ${uCur.toLocaleString('id-ID')}`);
+             noteParts.push(`Usage naik ${diffUsage.toLocaleString("id-ID")} dari ${uPrev.toLocaleString("id-ID")} jadi ${uCur.toLocaleString("id-ID")}`);
           } else {
-             noteParts.push(`Usage turun ${diffUsage.toLocaleString('id-ID')} dari ${uPrev.toLocaleString('id-ID')} jadi ${uCur.toLocaleString('id-ID')}`);
+             noteParts.push(`Usage turun ${diffUsage.toLocaleString("id-ID")} dari ${uPrev.toLocaleString("id-ID")} jadi ${uCur.toLocaleString("id-ID")}`);
           }
       }
       
       if (diffTarif >= 100) {
          if (tCur > tPrev) {
-            noteParts.push(`Tarif Naik ${diffTarif.toLocaleString('id-ID')}`);
+            noteParts.push(`Tarif Naik ${diffTarif.toLocaleString("id-ID")}`);
          } else if (tCur < tPrev) {
-            noteParts.push(`Tarif Turun ${diffTarif.toLocaleString('id-ID')}`);
+            noteParts.push(`Tarif Turun ${diffTarif.toLocaleString("id-ID")}`);
          }
       }
       
       let finalNote = noteParts.join(' & ');
       if (finalNote !== '' && diffTotal > 0) {
-         finalNote += ` Total Rp ${diffTotal.toLocaleString('id-ID')}`;
+         finalNote += ` Total Rp ${diffTotal.toLocaleString("id-ID")}`;
       }
       
       if (finalNote === '') {
-         setEditingNote({ outlet, category, text: `-` });
+         setEditingNote({ outlet, category, text: '-' });
       } else {
          setEditingNote({ outlet, category, text: finalNote });
       }
       
     } catch (err) {
-       console.error("Error generating auto note:", err);
+       console.error('Error generating auto note:', err);
        setEditingNote({ outlet, category, text: `Gagal memuat: ${err.message}` });
     }
     setGeneratingNote(false);

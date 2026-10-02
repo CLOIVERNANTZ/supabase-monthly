@@ -190,8 +190,14 @@ export default function AnalisaPage() {
       };
       const allowedUtils = utilsMap[category] || [];
       
-      let query1 = supabase2.from('payments').select('utility, periode, usage, tarif, totalInv').eq('outlet', outlet);
-      let query2 = supabase2.from('progress_pajak_detail').select('utilitas, periode_usage, periode, usage, tarif, inv_usage, dpp, ppn').eq('outlet', outlet);
+      let query1 = supabase2.from('payments')
+         .select('utility, periode, usage, tarif, totalInv, status')
+         .eq('outlet', outlet)
+         .not('status', 'eq', 'REJECTED')
+         .not('status', 'eq', 'CANCELLED');
+      let query2 = supabase2.from('progress_pajak_detail')
+         .select('utilitas, periode_usage, periode, usage, tarif, inv_usage, dpp, ppn')
+         .eq('outlet', outlet);
       
       if (allowedUtils.length > 0) {
         query1 = query1.in('utility', allowedUtils);
@@ -213,6 +219,8 @@ export default function AnalisaPage() {
             totalInv: (r.inv_usage != null) ? r.inv_usage : ((Number(r.dpp) || 0) + (Number(r.ppn) || 0))
          }))];
       }
+      
+      console.log('[AutoNote] outlet:', outlet, 'category:', category, 'rows:', data.length, data.map(d => ({ utility: d.utility, periode: d.periode, usage: d.usage })));
       
       if (data.length === 0) {
         setEditingNote({ outlet, category, text: `Data ${category} tidak ditemukan di DB2.` });
